@@ -32,7 +32,7 @@ void printInfo() {
 
 void printInertialNumbers() {
   char fileName[256];
-  snprintf(fileName, 256, "conf%d_rheology.txt", confNum);
+  snprintf(fileName, 256, "rheology_conf%d.txt", confNum);
   std::ofstream outFile(fileName);
 
   if (!outFile.is_open()) {
@@ -41,8 +41,8 @@ void printInertialNumbers() {
   }
 
   bool useDEM = !ADs.empty();
-  outFile << "# MP_index  MP_x  MP_y  I  mu_mohr_tan_phi  mu_rheology_tau_over_p ("
-          << (useDEM ? "DEM" : "MPM") << " mode, smoothed data)\n";
+  outFile << "# MP_index  MP_x  MP_y  I  mu_mohr_tan_phi  mu_rheology_tau_over_p (" << (useDEM ? "DEM" : "MPM")
+          << " mode, smoothed data)\n";
   std::cout << "Exporting I, mu_mohr = tan(phi), mu_rheology = tau/p\n";
 
   for (size_t i = 0; i < Conf.MP.size(); i++) {
@@ -51,16 +51,16 @@ void printInertialNumbers() {
     float sy  = (float)SmoothedData[i].stress.yy;
     float sxy = 0.5f * ((float)SmoothedData[i].stress.xy + (float)SmoothedData[i].stress.yx);
 
-    const auto *model = dynamic_cast<const MohrCoulomb *>(Conf.MP[i].constitutiveModel);
-    const float cohesion = model == nullptr ? 0.0f : std::max(0.0f, (float)model->Cohesion);
-    const float pressure = 0.5f * fabsf(sx + sy);
-    const float radius = sqrtf(0.25f * (sx - sy) * (sx - sy) + sxy * sxy);
+    const auto *model     = dynamic_cast<const MohrCoulomb *>(Conf.MP[i].constitutiveModel);
+    const float cohesion  = model == nullptr ? 0.0f : std::max(0.0f, (float)model->Cohesion);
+    const float pressure  = 0.5f * fabsf(sx + sy);
+    const float radius    = sqrtf(0.25f * (sx - sy) * (sx - sy) + sxy * sxy);
     const float amplitude = hypotf(pressure, cohesion);
 
     float mu_stress = 0.0f;
     if (amplitude > 1e-10f && radius < amplitude) {
       const float phi = asinf(radius / amplitude) - atan2f(cohesion, pressure);
-      mu_stress = tanf(std::max(0.0f, phi));
+      mu_stress       = tanf(std::max(0.0f, phi));
     }
 
     float d1     = (float)(SmoothedData[i].velGrad.xx - SmoothedData[i].velGrad.yy);
@@ -627,27 +627,27 @@ void precomputeColors(int n) {
     }
 
     for (size_t i = 0; i < Conf.MP.size(); i++) {
-      const float Lxx = (float)SmoothedData[i].velGrad.xx;
-      const float Lyy = (float)SmoothedData[i].velGrad.yy;
-      const float Lxy = (float)SmoothedData[i].velGrad.xy;
-      const float Lyx = (float)SmoothedData[i].velGrad.yx;
+      const float Lxx      = (float)SmoothedData[i].velGrad.xx;
+      const float Lyy      = (float)SmoothedData[i].velGrad.yy;
+      const float Lxy      = (float)SmoothedData[i].velGrad.xy;
+      const float Lyx      = (float)SmoothedData[i].velGrad.yx;
       const float pressure = 0.5f * (float)(SmoothedData[i].stress.xx + SmoothedData[i].stress.yy);
-      const float density = (float)SmoothedData[i].rho;
+      const float density  = (float)SmoothedData[i].rho;
 
       const float shearRate = sqrtf((Lxx - Lyy) * (Lxx - Lyy) + (Lxy + Lyx) * (Lxy + Lyx));
 
       if (useDEM) {
         const float diameter = 2.0f * (float)ADs[i].Rmean;
-        inertialNumber[i] = diameter * shearRate / sqrtf((fabsf(pressure) + 1e-6f) / density);
+        inertialNumber[i]    = diameter * shearRate / sqrtf((fabsf(pressure) + 1e-6f) / density);
       } else {
-        const float mass = density * (float)Conf.MP[i].vol;
+        const float mass  = density * (float)Conf.MP[i].vol;
         inertialNumber[i] = shearRate * sqrtf(mass / (fabsf(pressure) + 1e-6f));
       }
     }
 
     const auto minmax = std::minmax_element(inertialNumber.begin(), inertialNumber.end());
-    const float Imin = *minmax.first;
-    const float Imax = *minmax.second;
+    const float Imin  = *minmax.first;
+    const float Imax  = *minmax.second;
     colorTable.setMinMax(Imin, Imax);
     colorTable.setTableID(3);
     colorTable.Rebuild();
@@ -660,19 +660,19 @@ void precomputeColors(int n) {
     std::vector<float> frictionCoefficient(Conf.MP.size(), 0.0f);
 
     for (size_t i = 0; i < Conf.MP.size(); i++) {
-      const float sx = (float)SmoothedData[i].stress.xx;
-      const float sy = (float)SmoothedData[i].stress.yy;
+      const float sx  = (float)SmoothedData[i].stress.xx;
+      const float sy  = (float)SmoothedData[i].stress.yy;
       const float sxy = 0.5f * (float)(SmoothedData[i].stress.xy + SmoothedData[i].stress.yx);
 
-      const auto *model = dynamic_cast<const MohrCoulomb *>(Conf.MP[i].constitutiveModel);
+      const auto *model    = dynamic_cast<const MohrCoulomb *>(Conf.MP[i].constitutiveModel);
       const float cohesion = model == nullptr ? 0.0f : std::max(0.0f, (float)model->Cohesion);
       const float pressure = 0.5f * fabsf(sx + sy);
-      const float radius = sqrtf(0.25f * (sx - sy) * (sx - sy) + sxy * sxy);
+      const float radius   = sqrtf(0.25f * (sx - sy) * (sx - sy) + sxy * sxy);
 
       // Mohr-Coulomb tangency: R = p*sin(phi) + c*cos(phi).
       const float amplitude = hypotf(pressure, cohesion);
       if (amplitude > 1e-10f && radius < amplitude) {
-        const float phi = asinf(radius / amplitude) - atan2f(cohesion, pressure);
+        const float phi        = asinf(radius / amplitude) - atan2f(cohesion, pressure);
         frictionCoefficient[i] = tanf(std::max(0.0f, phi));
       }
     }
@@ -684,9 +684,7 @@ void precomputeColors(int n) {
     colorTable.setTableID(3);
     colorTable.Rebuild();
     std::cout << "MP colored by Mohr friction coefficient (mu_min = " << mumin << ", mu_max = " << mumax << ")\n";
-    for (size_t i = 0; i < Conf.MP.size(); i++) {
-      colorTable.getRGB(frictionCoefficient[i], &precompColors[i]);
-    }
+    for (size_t i = 0; i < Conf.MP.size(); i++) { colorTable.getRGB(frictionCoefficient[i], &precompColors[i]); }
   } break;
 
   case 12: {
@@ -694,14 +692,14 @@ void precomputeColors(int n) {
     std::vector<float> frictionCoefficient(Conf.MP.size(), 0.0f);
 
     for (size_t i = 0; i < Conf.MP.size(); i++) {
-      const float sx = (float)SmoothedData[i].stress.xx;
-      const float sy = (float)SmoothedData[i].stress.yy;
+      const float sx  = (float)SmoothedData[i].stress.xx;
+      const float sy  = (float)SmoothedData[i].stress.yy;
       const float sxy = 0.5f * (float)(SmoothedData[i].stress.xy + SmoothedData[i].stress.yx);
 
-      const float pressure = 0.5f * (sx + sy);
-      const float sxx = sx - pressure;
-      const float syy = sy - pressure;
-      const float tau = sqrtf(0.5f * (sxx * sxx + syy * syy + 2.0f * sxy * sxy));
+      const float pressure   = 0.5f * (sx + sy);
+      const float sxx        = sx - pressure;
+      const float syy        = sy - pressure;
+      const float tau        = sqrtf(0.5f * (sxx * sxx + syy * syy + 2.0f * sxy * sxy));
       frictionCoefficient[i] = tau / (fabsf(pressure) + 1e-10f);
     }
 
@@ -712,9 +710,7 @@ void precomputeColors(int n) {
     colorTable.setTableID(3);
     colorTable.Rebuild();
     std::cout << "MP colored by mu from deviatoric stress (mu_min = " << mumin << ", mu_max = " << mumax << ")\n";
-    for (size_t i = 0; i < Conf.MP.size(); i++) {
-      colorTable.getRGB(frictionCoefficient[i], &precompColors[i]);
-    }
+    for (size_t i = 0; i < Conf.MP.size(); i++) { colorTable.getRGB(frictionCoefficient[i], &precompColors[i]); }
   } break;
 
   default: {
