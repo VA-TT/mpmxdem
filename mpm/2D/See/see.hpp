@@ -82,7 +82,6 @@ int MP_deformed_shape = 0;
 int MP_contour        = 1;
 
 int color_option = 0;
-bool use_raw_data = false;  // Toggle between raw and smoothed data for I and mu
 ColorTable colorTable;
 glColorBar colorBar;
 
