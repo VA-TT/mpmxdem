@@ -1,5 +1,6 @@
 #include "see.hpp"
 
+#include <fstream>
 #include <limits>
 #include <typeinfo>
 
@@ -12,6 +13,12 @@ void printHelp() {
   cout << "+         load next configuration file" << endl;
   cout << "-         load previous configuration file" << endl;
   cout << "=         fit the view" << endl;
+  cout << "i         print current conf info" << endl;
+  cout << "I         show Inertial Number (DEM/MPM)" << endl;
+  cout << "M         show mu from principal stresses" << endl;
+  cout << "R         show mu from deviatoric stress (rheology)" << endl;
+  cout << "r         toggle raw/smoothed data for I and mu" << endl;
+  cout << "p         save I, mu_stress, mu_rheology to file" << endl;
   cout << "q         quit" << endl;
   // cout << "" << endl;
   cout << endl;
@@ -21,6 +28,82 @@ void printInfo() {
   using namespace std;
 
   cout << "\nCurrent Conf = " << confNum << "\n\n";
+}
+
+void printInertialNumbers() {
+  char fileName[256];
+  snprintf(fileName, 256, "conf%d_rheology%s.txt", confNum, use_raw_data ? "_raw" : "");
+  std::ofstream outFile(fileName);
+
+  if (!outFile.is_open()) {
+    std::cout << "Error: Cannot open file " << fileName << " for writing.\n";
+    return;
+  }
+
+  bool useDEM = !ADs.empty();
+  outFile << "# MP_index  MP_x  MP_y  I  mu_stress  mu_rheology (" << (useDEM ? "DEM" : "MPM") << " mode, "
+          << (use_raw_data ? "raw data" : "smoothed data") << ")\n";
+  std::cout << "Exporting I, mu_stress (Mohr circle), mu_rheology (deviatoric norm) - "
+            << (use_raw_data ? "RAW data" : "SMOOTHED data") << "\n";
+
+  for (size_t i = 0; i < Conf.MP.size(); i++) {
+
+    // --- stress components ---
+    float sx, sy, sxy;
+    if (use_raw_data) {
+      sx  = (float)Conf.MP[i].stress.xx;
+      sy  = (float)Conf.MP[i].stress.yy;
+      sxy = 0.5f * ((float)Conf.MP[i].stress.xy + (float)Conf.MP[i].stress.yx);
+    } else {
+      sx  = (float)SmoothedData[i].stress.xx;
+      sy  = (float)SmoothedData[i].stress.yy;
+      sxy = 0.5f * ((float)SmoothedData[i].stress.xy + (float)SmoothedData[i].stress.yx);
+    }
+
+    // --- mu_stress: Mohr circle, même convention que gnuplot ---
+    // sigma1 = -(sx+sy)/2 + R,  sigma3 = -(sx+sy)/2 - R
+    // center = -(sx+sy)/2  (nén dương)
+    // mu = R / |center|
+    float center    = -(sx + sy) * 0.5f;
+    float radius    = sqrtf(0.25f * (sx - sy) * (sx - sy) + sxy * sxy);
+    float mu_stress = radius / (fabsf(center) + 1e-10f);
+
+    // --- strain rate & pressure ---
+    float d1, d2, epsdot, pres;
+    if (use_raw_data) {
+      d1   = (float)(Conf.MP[i].velGrad.xx - Conf.MP[i].velGrad.yy);
+      d2   = (float)(Conf.MP[i].velGrad.xy + Conf.MP[i].velGrad.yx);
+      pres = 0.5f * (float)(Conf.MP[i].stress.xx + Conf.MP[i].stress.yy);
+    } else {
+      d1   = (float)(SmoothedData[i].velGrad.xx - SmoothedData[i].velGrad.yy);
+      d2   = (float)(SmoothedData[i].velGrad.xy + SmoothedData[i].velGrad.yx);
+      pres = 0.5f * (float)(SmoothedData[i].stress.xx + SmoothedData[i].stress.yy);
+    }
+    epsdot = sqrtf(d1 * d1 + d2 * d2);
+
+    // --- Inertial Number ---
+    float I;
+    float rho = use_raw_data ? (float)Conf.MP[i].density : (float)SmoothedData[i].rho;
+    if (useDEM) {
+      I = (2.0f * ADs[i].Rmean * epsdot) / sqrtf((fabsf(pres) + 1e-6f) / rho);
+    } else {
+      float m = rho * (float)Conf.MP[i].vol;
+      I       = epsdot * sqrtf(m / (fabsf(pres) + 1e-6f));
+    }
+
+    // --- mu_rheology: deviatoric stress norm / |P| ---
+    float tau_xx      = sx - pres;
+    float tau_yy      = sy - pres;
+    float tau_xy      = sxy;
+    float tau_norm    = sqrtf(tau_xx * tau_xx + tau_yy * tau_yy + 2.0f * tau_xy * tau_xy);
+    float mu_rheology = tau_norm / (fabsf(pres) + 1e-10f);
+
+    outFile << i << "  " << Conf.MP[i].pos.x << "  " << Conf.MP[i].pos.y << "  " << I << "  " << mu_stress << "  "
+            << mu_rheology << "\n";
+  }
+
+  outFile.close();
+  std::cout << "Data saved to " << fileName << " (" << Conf.MP.size() << " MPs)\n";
 }
 
 void keyboard(unsigned char Key, int /*x*/, int /*y*/) {
@@ -66,10 +149,6 @@ void keyboard(unsigned char Key, int /*x*/, int /*y*/) {
     if (!ADs.empty()) precomputeColors(9);
   } break;
 
-  case 'a': {
-    precomputeColors(11);
-  } break;
-
   case 'd': {
     show_node_dofs = 1 - show_node_dofs;
   } break;
@@ -92,6 +171,29 @@ void keyboard(unsigned char Key, int /*x*/, int /*y*/) {
 
   case 'i': {
     printInfo();
+  } break;
+
+  case 'I': {
+    precomputeColors(10);
+  } break;
+
+  case 'M': {
+    precomputeColors(11);
+  } break;
+
+  case 'R': {
+    precomputeColors(12);
+  } break;
+
+  case 'r': {
+    use_raw_data = !use_raw_data;
+    std::cout << "Data mode: " << (use_raw_data ? "RAW" : "SMOOTHED") << std::endl;
+    // Recompute current visualization if showing I or mu
+    if (color_option >= 10 && color_option <= 12) { precomputeColors(color_option); }
+  } break;
+
+  case 'p': {
+    printInertialNumbers();
   } break;
 
   case 'm': {
@@ -411,18 +513,18 @@ void precomputeColors(int n) {
   } break;
 
   case 4: {
-    colorBar.setTitle("sig_yy");
+    colorBar.setTitle("sig_xx");
     float pmax = -std::numeric_limits<float>::max();
     float pmin = std::numeric_limits<float>::max();
     for (size_t i = 0; i < Conf.MP.size(); i++) {
-      float p = (float)SmoothedData[i].stress.yy;
+      float p = (float)SmoothedData[i].stress.xx;
       if (p > pmax) pmax = p;
       if (p < pmin) pmin = p;
     }
     colorTable.setMinMax(pmin, pmax);
     colorTable.setTableID(3);
     colorTable.Rebuild();
-    std::cout << "MP colored by sig_yy (s_yy_min = " << pmin << ", s_yy_max = " << pmax << ")\n";
+    std::cout << "MP colored by sig_xx (s_xx_min = " << pmin << ", s_xx_max = " << pmax << ")\n";
 
     for (size_t i = 0; i < SmoothedData.size(); i++) {
       float p = (float)SmoothedData[i].stress.xx;
@@ -537,64 +639,222 @@ void precomputeColors(int n) {
   } break;
 
   case 10: {
-    if (ADs.empty()) break;
+    bool useDEM = !ADs.empty();
 
-    colorBar.setTitle("Inertial number (DEM)");
+    if (useDEM) {
+      colorBar.setTitle(use_raw_data ? "Inertial number (DEM, raw)" : "Inertial number (DEM)");
+      std::cout << "Computing Inertial Number (DEM mode, " << (use_raw_data ? "raw data" : "smoothed data") << ")\n";
+    } else {
+      colorBar.setTitle(use_raw_data ? "Inertial number (MPM, raw)" : "Inertial number (MPM)");
+      std::cout << "Computing Inertial Number (MPM mode, " << (use_raw_data ? "raw data" : "smoothed data") << ")\n";
+      std::cout << "  Formula: I = epsdot * sqrt(vol * rho / P)\n";
+    }
+
     float Imax = -std::numeric_limits<float>::max();
     float Imin = std::numeric_limits<float>::max();
+
+    // Debug: track non-zero values
+    int nonzero_count = 0;
+    float epsdot_max  = 0.0f;
+
     for (size_t i = 0; i < Conf.MP.size(); i++) {
-      float d1   = (float)(SmoothedData[i].velGrad.xx - SmoothedData[i].velGrad.yy);
-      float d2   = (float)(SmoothedData[i].velGrad.xy + SmoothedData[i].velGrad.yx);
-      float pres = 0.5f * (float)(SmoothedData[i].stress.xx + SmoothedData[i].stress.yy);
-      float I = (float)((2 * ADs[i].Rmean * sqrt(d1 * d1 + d2 * d2)) / sqrt((abs(pres) + 1e-6) / SmoothedData[i].rho));
+      // Select data source based on flag
+      float d1, d2, epsdot, pres;
+
+      if (use_raw_data) {
+        d1     = (float)(Conf.MP[i].velGrad.xx - Conf.MP[i].velGrad.yy);
+        d2     = (float)(Conf.MP[i].velGrad.xy + Conf.MP[i].velGrad.yx);
+        epsdot = sqrt(d1 * d1 + d2 * d2);
+        pres   = 0.5f * (float)(Conf.MP[i].stress.xx + Conf.MP[i].stress.yy);
+      } else {
+        d1     = (float)(SmoothedData[i].velGrad.xx - SmoothedData[i].velGrad.yy);
+        d2     = (float)(SmoothedData[i].velGrad.xy + SmoothedData[i].velGrad.yx);
+        epsdot = sqrt(d1 * d1 + d2 * d2);
+        pres   = 0.5f * (float)(SmoothedData[i].stress.xx + SmoothedData[i].stress.yy);
+      }
+
+      float I;
+      if (useDEM) {
+        // DEM: I = (2 * Rmean * epsdot) / sqrt(P/rho)
+        float rho = use_raw_data ? (float)Conf.MP[i].density : (float)SmoothedData[i].rho;
+        I         = (float)((2 * ADs[i].Rmean * epsdot) / sqrt((abs(pres) + 1e-6) / rho));
+      } else {
+        // MPM: I = epsdot * sqrt(m/P) with m = rho * vol
+        float rho = use_raw_data ? (float)Conf.MP[i].density : (float)SmoothedData[i].rho;
+        float m   = (float)(rho * Conf.MP[i].vol);
+        I         = epsdot * sqrt(m / (abs(pres) + 1e-6));
+      }
+
       if (I > Imax) Imax = I;
       if (I < Imin) Imin = I;
+      if (I > 1e-10) nonzero_count++;
+      if (epsdot > epsdot_max) epsdot_max = epsdot;
     }
+
     colorTable.setMinMax(Imin, Imax);
     colorTable.setTableID(3);
     colorTable.Rebuild();
     std::cout << "MP colored by Inertial Number (I_min = " << Imin << ", I_max = " << Imax << ")\n";
+    std::cout << "  Non-zero MPs: " << nonzero_count << "/" << Conf.MP.size() << ", epsdot_max = " << epsdot_max
+              << "\n";
 
-    for (size_t i = 0; i < SmoothedData.size(); i++) {
-      float d1   = (float)(SmoothedData[i].velGrad.xx - SmoothedData[i].velGrad.yy);
-      float d2   = (float)(SmoothedData[i].velGrad.xy + SmoothedData[i].velGrad.yx);
-      float pres = 0.5f * (float)(SmoothedData[i].stress.xx + SmoothedData[i].stress.yy);
-      float I    = (float)((ADs[i].Rmean / sqrt(d1 * d1 + d2 * d2)) / sqrt((abs(pres) + 1e-6) * SmoothedData[i].rho));
+    for (size_t i = 0; i < Conf.MP.size(); i++) {
+      float d1, d2, epsdot, pres;
+
+      if (use_raw_data) {
+        d1     = (float)(Conf.MP[i].velGrad.xx - Conf.MP[i].velGrad.yy);
+        d2     = (float)(Conf.MP[i].velGrad.xy + Conf.MP[i].velGrad.yx);
+        epsdot = sqrt(d1 * d1 + d2 * d2);
+        pres   = 0.5f * (float)(Conf.MP[i].stress.xx + Conf.MP[i].stress.yy);
+      } else {
+        d1     = (float)(SmoothedData[i].velGrad.xx - SmoothedData[i].velGrad.yy);
+        d2     = (float)(SmoothedData[i].velGrad.xy + SmoothedData[i].velGrad.yx);
+        epsdot = sqrt(d1 * d1 + d2 * d2);
+        pres   = 0.5f * (float)(SmoothedData[i].stress.xx + SmoothedData[i].stress.yy);
+      }
+
+      float I;
+      if (useDEM) {
+        // DEM formula
+        float rho = use_raw_data ? (float)Conf.MP[i].density : (float)SmoothedData[i].rho;
+        I         = (float)((2 * ADs[i].Rmean * epsdot) / sqrt((abs(pres) + 1e-6) / rho));
+      } else {
+        // MPM formula
+        float rho = use_raw_data ? (float)Conf.MP[i].density : (float)SmoothedData[i].rho;
+        float m   = (float)(rho * Conf.MP[i].vol);
+        I         = epsdot * sqrt(m / (abs(pres) + 1e-6));
+
+        // Debug: print first 3 MPs with non-zero I
+        if (i < 3 && I > 1e-10) {
+          std::cout << "  MP[" << i << "]: epsdot=" << epsdot << ", pres=" << pres << ", rho=" << rho
+                    << ", vol=" << Conf.MP[i].vol << ", I=" << I << "\n";
+        }
+      }
+
       colorTable.getRGB(I, &precompColors[i]);
     }
   } break;
-
   case 11: {
-    colorBar.setTitle("sigma1/sigma3");
-    float ratioMax = -std::numeric_limits<float>::max();
-    float ratioMin = std::numeric_limits<float>::max();
+    colorBar.setTitle(use_raw_data ? "mu from principal stresses (raw)" : "mu from principal stresses");
+    std::cout << "Computing mu from Mohr circle (" << (use_raw_data ? "raw data" : "smoothed data") << ")\n";
+
+    float mumax = -std::numeric_limits<float>::max();
+    float mumin = std::numeric_limits<float>::max();
+
     for (size_t i = 0; i < Conf.MP.size(); i++) {
-      const float sxx    = (float)SmoothedData[i].stress.xx;
-      const float syy    = (float)SmoothedData[i].stress.yy;
-      const float sxy    = 0.5f * (float)(SmoothedData[i].stress.xy + SmoothedData[i].stress.yx);
-      const float m      = 0.5f * (sxx + syy);
-      const float r      = sqrtf(0.25f * (sxx - syy) * (sxx - syy) + sxy * sxy);
-      const float sigma1 = m + r;
-      const float sigma3 = m - r;
-      const float ratio  = sigma1 / (sigma3 + 1.0e-12f);
-      if (ratio > ratioMax) ratioMax = ratio;
-      if (ratio < ratioMin) ratioMin = ratio;
+      float sx, sy, sxy;
+      if (use_raw_data) {
+        sx  = (float)Conf.MP[i].stress.xx;
+        sy  = (float)Conf.MP[i].stress.yy;
+        sxy = (float)Conf.MP[i].stress.xy;
+      } else {
+        sx  = (float)SmoothedData[i].stress.xx;
+        sy  = (float)SmoothedData[i].stress.yy;
+        sxy = (float)SmoothedData[i].stress.xy;
+      }
+
+      // Gnuplot convention: nén dương
+      // sigma1 = -(sx+sy)/2 + sqrt(((sx-sy)/2)^2 + sxy^2)
+      // sigma3 = -(sx+sy)/2 - sqrt(...)
+      float center = -(sx + sy) * 0.5f;
+      float radius = sqrtf(0.25f * (sx - sy) * (sx - sy) + sxy * sxy);
+      float mu     = radius / (fabsf(center) + 1e-10f);
+
+      if (mu > mumax) mumax = mu;
+      if (mu < mumin) mumin = mu;
     }
-    colorTable.setMinMax(ratioMin, ratioMax);
+
+    colorTable.setMinMax(mumin, mumax);
     colorTable.setTableID(3);
     colorTable.Rebuild();
-    std::cout << "MP colored by sigma1/sigma3 (ratio_min = " << ratioMin << ", ratio_max = " << ratioMax << ")\n";
+    std::cout << "MP colored by mu from Mohr circle (mu_min = " << mumin << ", mu_max = " << mumax << ")\n";
 
     for (size_t i = 0; i < Conf.MP.size(); i++) {
-      const float sxx    = (float)SmoothedData[i].stress.xx;
-      const float syy    = (float)SmoothedData[i].stress.yy;
-      const float sxy    = 0.5f * (float)(SmoothedData[i].stress.xy + SmoothedData[i].stress.yx);
-      const float m      = 0.5f * (sxx + syy);
-      const float r      = sqrtf(0.25f * (sxx - syy) * (sxx - syy) + sxy * sxy);
-      const float sigma1 = m + r;
-      const float sigma3 = m - r;
-      const float ratio  = sigma1 / (sigma3 + 1.0e-12f);
-      colorTable.getRGB(ratio, &precompColors[i]);
+      float sx, sy, sxy;
+      if (use_raw_data) {
+        sx  = (float)Conf.MP[i].stress.xx;
+        sy  = (float)Conf.MP[i].stress.yy;
+        sxy = (float)Conf.MP[i].stress.xy;
+      } else {
+        sx  = (float)SmoothedData[i].stress.xx;
+        sy  = (float)SmoothedData[i].stress.yy;
+        sxy = (float)SmoothedData[i].stress.xy;
+      }
+
+      float center = -(sx + sy) * 0.5f;
+      float radius = sqrtf(0.25f * (sx - sy) * (sx - sy) + sxy * sxy);
+      float mu     = radius / (fabsf(center) + 1e-10f);
+
+      colorTable.getRGB(mu, &precompColors[i]);
+    }
+  } break;
+
+  case 12: {
+    colorBar.setTitle(use_raw_data ? "mu from deviatoric stress (rheology, raw)"
+                                   : "mu from deviatoric stress (rheology)");
+    std::cout << "Computing mu from deviatoric stress (" << (use_raw_data ? "raw data" : "smoothed data") << ")\n";
+
+    float mumax = -std::numeric_limits<float>::max();
+    float mumin = std::numeric_limits<float>::max();
+
+    for (size_t i = 0; i < Conf.MP.size(); i++) {
+      float pres;
+      if (use_raw_data) {
+        pres = 0.5f * (float)(Conf.MP[i].stress.xx + Conf.MP[i].stress.yy);
+      } else {
+        pres = 0.5f * (float)(SmoothedData[i].stress.xx + SmoothedData[i].stress.yy);
+      }
+
+      // Deviatoric stress: tau = sigma - P*I
+      float tau_xx, tau_yy, tau_xy;
+      if (use_raw_data) {
+        tau_xx = Conf.MP[i].stress.xx - pres;
+        tau_yy = Conf.MP[i].stress.yy - pres;
+        tau_xy = Conf.MP[i].stress.xy;
+      } else {
+        tau_xx = SmoothedData[i].stress.xx - pres;
+        tau_yy = SmoothedData[i].stress.yy - pres;
+        tau_xy = SmoothedData[i].stress.xy;
+      }
+
+      // Frobenius norm of deviatoric stress
+      float tau_norm = sqrt(tau_xx * tau_xx + tau_yy * tau_yy + 2.0f * tau_xy * tau_xy);
+
+      // mu = |tau| / P
+      float mu = tau_norm / (abs(pres) + 1e-10);
+
+      if (mu > mumax) mumax = mu;
+      if (mu < mumin) mumin = mu;
+    }
+
+    colorTable.setMinMax(mumin, mumax);
+    colorTable.setTableID(3);
+    colorTable.Rebuild();
+    std::cout << "MP colored by mu from deviatoric stress (mu_min = " << mumin << ", mu_max = " << mumax << ")\n";
+
+    for (size_t i = 0; i < Conf.MP.size(); i++) {
+      float pres;
+      if (use_raw_data) {
+        pres = 0.5f * (float)(Conf.MP[i].stress.xx + Conf.MP[i].stress.yy);
+      } else {
+        pres = 0.5f * (float)(SmoothedData[i].stress.xx + SmoothedData[i].stress.yy);
+      }
+
+      float tau_xx, tau_yy, tau_xy;
+      if (use_raw_data) {
+        tau_xx = Conf.MP[i].stress.xx - pres;
+        tau_yy = Conf.MP[i].stress.yy - pres;
+        tau_xy = Conf.MP[i].stress.xy;
+      } else {
+        tau_xx = SmoothedData[i].stress.xx - pres;
+        tau_yy = SmoothedData[i].stress.yy - pres;
+        tau_xy = SmoothedData[i].stress.xy;
+      }
+
+      float tau_norm = sqrt(tau_xx * tau_xx + tau_yy * tau_yy + 2.0f * tau_xy * tau_xy);
+      float mu       = tau_norm / (abs(pres) + 1e-10);
+
+      colorTable.getRGB(mu, &precompColors[i]);
     }
   } break;
 
@@ -902,10 +1162,13 @@ void menu(int num) {
     precomputeColors(9);
   } break;
   case 210: {
-    if (!ADs.empty()) precomputeColors(10);
+    precomputeColors(10);
   } break;
   case 211: {
     precomputeColors(11);
+  } break;
+  case 212: {
+    precomputeColors(12);
   } break;
 
   // Grid informations
@@ -941,14 +1204,15 @@ void buildMenu() {
   glutAddMenuEntry("Velocity Magnitude", 201);
   glutAddMenuEntry("Pressure, tr(Sig)/3", 202);
   glutAddMenuEntry("Density", 203);
-  glutAddMenuEntry("Sig yy", 204);
+  glutAddMenuEntry("Sig xx", 204);
   glutAddMenuEntry("DEM-cell damage (DEM)", 205);
   glutAddMenuEntry("Delta Eps Deviator", 206);
   glutAddMenuEntry("Volume Variation", 207);
   glutAddMenuEntry("Fx (with Obstacle)", 208);
   glutAddMenuEntry("Fy (with Obstacle)", 209);
-  glutAddMenuEntry("Inertial number (DEM)", 210);
-  glutAddMenuEntry("Sigma1 / Sigma3", 211);
+  glutAddMenuEntry("Inertial Number (DEM/MPM)", 210);
+  glutAddMenuEntry("mu from Principal Stresses", 211);
+  glutAddMenuEntry("mu from Deviatoric Stress (rheology)", 212);
 
   int submenu300 = glutCreateMenu(menu); // Grid informations
   glutAddMenuEntry("Show/Hide Grid", 300);
