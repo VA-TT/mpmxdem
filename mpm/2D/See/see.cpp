@@ -4,9 +4,102 @@
 #include <limits>
 #include <typeinfo>
 
-#include "ConstitutiveModels/MohrCoulomb.hpp"
 #include "Obstacles/Circle.hpp"
 #include "Obstacles/Line.hpp"
+
+namespace {
+
+struct RheologyData {
+  double pressure{0.0};
+  double shearStress{0.0};
+  double shearRate{0.0};
+  double grainDensity{0.0};
+  double diameter{0.0};
+  double inertialNumber{std::numeric_limits<double>::quiet_NaN()};
+  double frictionCoefficient{std::numeric_limits<double>::quiet_NaN()};
+  bool stressValid{false};
+  bool inertialNumberValid{false};
+};
+
+RheologyData computeRheologyData(size_t i) {
+  RheologyData data;
+
+  const double sigmaXX = SmoothedData[i].stress.xx;
+  const double sigmaYY = SmoothedData[i].stress.yy;
+  const double sigmaZZ = SmoothedData[i].outOfPlaneStress;
+  const double sigmaXY = 0.5 * (SmoothedData[i].stress.xy + SmoothedData[i].stress.yx);
+
+  // MPM uses negative stress in compression. The DEM REV is three-dimensional,
+  // even though its macroscopic kinematics are plane strain.
+  data.pressure = -(sigmaXX + sigmaYY + sigmaZZ) / 3.0;
+  const double compressionXX = -sigmaXX;
+  const double compressionYY = -sigmaYY;
+  const double compressionZZ = -sigmaZZ;
+  const double inPlaneRadius =
+      std::sqrt(0.25 * (compressionXX - compressionYY) * (compressionXX - compressionYY) + sigmaXY * sigmaXY);
+  const double minimumCompressiveStress =
+      std::min(0.5 * (compressionXX + compressionYY) - inPlaneRadius, compressionZZ);
+  if (std::isfinite(data.pressure) && data.pressure > 0.0 && minimumCompressiveStress > 0.0) {
+    const double devXX = sigmaXX + data.pressure;
+    const double devYY = sigmaYY + data.pressure;
+    const double devZZ = sigmaZZ + data.pressure;
+    data.shearStress =
+        std::sqrt(0.5 * (devXX * devXX + devYY * devYY + devZZ * devZZ + 2.0 * sigmaXY * sigmaXY));
+    data.frictionCoefficient = data.shearStress / data.pressure;
+    data.stressValid = std::isfinite(data.frictionCoefficient);
+  }
+
+  const double Dxx = SmoothedData[i].velGrad.xx;
+  const double Dyy = SmoothedData[i].velGrad.yy;
+  const double Dzz = 0.0;  // plane strain
+  const double Dxy = 0.5 * (SmoothedData[i].velGrad.xy + SmoothedData[i].velGrad.yx);
+  const double meanD = (Dxx + Dyy + Dzz) / 3.0;
+  const double devDxx = Dxx - meanD;
+  const double devDyy = Dyy - meanD;
+  const double devDzz = Dzz - meanD;
+  data.shearRate =
+      std::sqrt(2.0 * (devDxx * devDxx + devDyy * devDyy + devDzz * devDzz + 2.0 * Dxy * Dxy));
+
+  if (data.stressValid && i < ADs.size() && ADs[i].Vsolid > 0.0 && ADs[i].Vcell > 0.0 &&
+      ADs[i].Rmean > 0.0) {
+    const double solidFraction = ADs[i].Vsolid / ADs[i].Vcell;
+    data.grainDensity = SmoothedData[i].rho / solidFraction;
+    data.diameter = 2.0 * ADs[i].Rmean;
+    if (std::isfinite(data.grainDensity) && data.grainDensity > 0.0) {
+      data.inertialNumber = data.diameter * data.shearRate * std::sqrt(data.grainDensity / data.pressure);
+      data.inertialNumberValid = std::isfinite(data.inertialNumber);
+    }
+  }
+
+  return data;
+}
+
+void smoothOutOfPlaneStress(MPMbox &box) {
+  std::vector<double> nodalMass(box.nodes.size(), 0.0);
+  std::vector<double> nodalStress(box.nodes.size(), 0.0);
+
+  for (size_t p = 0; p < box.MP.size(); p++) {
+    const size_t *nodeIndices = &(box.Elem[box.MP[p].e].I[0]);
+    for (size_t r = 0; r < (size_t)element::nbNodes; r++) {
+      const double weightedMass = box.MP[p].N[r] * box.MP[p].mass;
+      nodalMass[nodeIndices[r]] += weightedMass;
+      nodalStress[nodeIndices[r]] += weightedMass * box.MP[p].outOfPlaneStress;
+    }
+  }
+
+  for (size_t p = 0; p < box.MP.size(); p++) {
+    const size_t *nodeIndices = &(box.Elem[box.MP[p].e].I[0]);
+    SmoothedData[p].outOfPlaneStress = 0.0;
+    for (size_t r = 0; r < (size_t)element::nbNodes; r++) {
+      const size_t node = nodeIndices[r];
+      if (nodalMass[node] > box.tolmass) {
+        SmoothedData[p].outOfPlaneStress += box.MP[p].N[r] * nodalStress[node] / nodalMass[node];
+      }
+    }
+  }
+}
+
+}  // namespace
 
 void printHelp() {
 
@@ -53,9 +146,8 @@ void printHelp() {
   std::cout << " 8       | fx (with obstacles, for debug)" << std::endl;
   std::cout << " 9       | fy (with obstacles, for debug)" << std::endl;
   std::cout << "---------|--USE MENU FOR OTHER COLORS---------------" << std::endl;
-  std::cout << " I       | show Inertial Number (DEM/MPM)" << std::endl;
-  std::cout << " M       | show mu from principal stresses" << std::endl;
-  std::cout << " R       | show mu from deviatoric stress (rheology)" << std::endl;
+  std::cout << " I       | show Inertial Number (MPMxDEM)" << std::endl;
+  std::cout << " M       | show rheology mu = tau/p" << std::endl;
   std::cout << std::endl;
 }
 
@@ -74,51 +166,15 @@ void printInertialNumbers() {
     return;
   }
 
-  bool useDEM = !ADs.empty();
-  outFile << "# MP_index  MP_x  MP_y  I  mu_mohr_tan_phi  mu_rheology_tau_over_p (" << (useDEM ? "DEM" : "MPM")
-          << " mode, smoothed data)\n";
-  std::cout << "Exporting I, mu_mohr = tan(phi), mu_rheology = tau/p\n";
+  outFile << "# MP_index MP_x MP_y I mu pressure tau shear_rate grain_density diameter valid_I valid_mu\n";
+  std::cout << "Exporting 3D-invariant I and mu = tau/p from smoothed data\n";
 
   for (size_t i = 0; i < Conf.MP.size(); i++) {
-
-    float sx  = (float)SmoothedData[i].stress.xx;
-    float sy  = (float)SmoothedData[i].stress.yy;
-    float sxy = 0.5f * ((float)SmoothedData[i].stress.xy + (float)SmoothedData[i].stress.yx);
-
-    const auto *model     = dynamic_cast<const MohrCoulomb *>(Conf.MP[i].constitutiveModel);
-    const float cohesion  = model == nullptr ? 0.0f : std::max(0.0f, (float)model->Cohesion);
-    const float pressure  = 0.5f * fabsf(sx + sy);
-    const float radius    = sqrtf(0.25f * (sx - sy) * (sx - sy) + sxy * sxy);
-    const float amplitude = hypotf(pressure, cohesion);
-
-    float mu_stress = 0.0f;
-    if (amplitude > 1e-10f && radius < amplitude) {
-      const float phi = asinf(radius / amplitude) - atan2f(cohesion, pressure);
-      mu_stress       = tanf(std::max(0.0f, phi));
-    }
-
-    float d1     = (float)(SmoothedData[i].velGrad.xx - SmoothedData[i].velGrad.yy);
-    float d2     = (float)(SmoothedData[i].velGrad.xy + SmoothedData[i].velGrad.yx);
-    float epsdot = sqrtf(d1 * d1 + d2 * d2);
-    float pres   = 0.5f * (sx + sy);
-
-    float I;
-    float rho = (float)SmoothedData[i].rho;
-    if (useDEM) {
-      I = (2.0f * ADs[i].Rmean * epsdot) / sqrtf((fabsf(pres) + 1e-6f) / rho);
-    } else {
-      float m = rho * (float)Conf.MP[i].vol;
-      I       = epsdot * sqrtf(m / (fabsf(pres) + 1e-6f));
-    }
-
-    float tau_xx      = sx - pres;
-    float tau_yy      = sy - pres;
-    float tau_xy      = sxy;
-    float tau         = sqrtf(0.5f * (tau_xx * tau_xx + tau_yy * tau_yy + 2.0f * tau_xy * tau_xy));
-    float mu_rheology = tau / (fabsf(pres) + 1e-10f);
-
-    outFile << i << "  " << Conf.MP[i].pos.x << "  " << Conf.MP[i].pos.y << "  " << I << "  " << mu_stress << "  "
-            << mu_rheology << "\n";
+    const RheologyData data = computeRheologyData(i);
+    outFile << i << ' ' << Conf.MP[i].pos.x << ' ' << Conf.MP[i].pos.y << ' ' << data.inertialNumber << ' '
+            << data.frictionCoefficient << ' ' << data.pressure << ' ' << data.shearStress << ' ' << data.shearRate
+            << ' ' << data.grainDensity << ' ' << data.diameter << ' ' << data.inertialNumberValid << ' '
+            << data.stressValid << '\n';
   }
 
   outFile.close();
@@ -202,10 +258,6 @@ void keyboard(unsigned char Key, int /*x*/, int /*y*/) {
 
   case 'M': {
     precomputeColors(11);
-  } break;
-
-  case 'R': {
-    precomputeColors(12);
   } break;
 
   case 'p': {
@@ -657,100 +709,71 @@ void precomputeColors(int n) {
   } break;
 
   case 10: {
-    const bool useDEM = !ADs.empty();
     std::vector<float> inertialNumber(Conf.MP.size(), 0.0f);
-
-    if (useDEM) {
-      colorBar.setTitle("Inertial number (DEM)");
-    } else {
-      colorBar.setTitle("Inertial number (MPM)");
-    }
+    std::vector<bool> valid(Conf.MP.size(), false);
+    colorBar.setTitle("Inertial number (DEM)");
+    float Imin = std::numeric_limits<float>::max();
+    float Imax = -std::numeric_limits<float>::max();
 
     for (size_t i = 0; i < Conf.MP.size(); i++) {
-      const float Lxx      = (float)SmoothedData[i].velGrad.xx;
-      const float Lyy      = (float)SmoothedData[i].velGrad.yy;
-      const float Lxy      = (float)SmoothedData[i].velGrad.xy;
-      const float Lyx      = (float)SmoothedData[i].velGrad.yx;
-      const float pressure = 0.5f * (float)(SmoothedData[i].stress.xx + SmoothedData[i].stress.yy);
-      const float density  = (float)SmoothedData[i].rho;
-
-      const float shearRate = sqrtf((Lxx - Lyy) * (Lxx - Lyy) + (Lxy + Lyx) * (Lxy + Lyx));
-
-      if (useDEM) {
-        const float diameter = 2.0f * (float)ADs[i].Rmean;
-        inertialNumber[i]    = diameter * shearRate / sqrtf((fabsf(pressure) + 1e-6f) / density);
-      } else {
-        const float mass  = density * (float)Conf.MP[i].vol;
-        inertialNumber[i] = shearRate * sqrtf(mass / (fabsf(pressure) + 1e-6f));
+      const RheologyData data = computeRheologyData(i);
+      if (data.inertialNumberValid) {
+        inertialNumber[i] = (float)data.inertialNumber;
+        valid[i] = true;
+        Imin = std::min(Imin, inertialNumber[i]);
+        Imax = std::max(Imax, inertialNumber[i]);
       }
     }
 
-    const auto minmax = std::minmax_element(inertialNumber.begin(), inertialNumber.end());
-    const float Imin  = *minmax.first;
-    const float Imax  = *minmax.second;
+    if (Imin > Imax) {
+      std::cout << "Cannot compute I: positive pressure and DEM additional data are required\n";
+      break;
+    }
     colorTable.setMinMax(Imin, Imax);
     colorTable.setTableID(3);
     colorTable.Rebuild();
     std::cout << "MP colored by Inertial Number (I_min = " << Imin << ", I_max = " << Imax << ")\n";
-    for (size_t i = 0; i < Conf.MP.size(); i++) { colorTable.getRGB(inertialNumber[i], &precompColors[i]); }
+    for (size_t i = 0; i < Conf.MP.size(); i++) {
+      if (valid[i]) {
+        colorTable.getRGB(inertialNumber[i], &precompColors[i]);
+      } else {
+        precompColors[i].set(128, 128, 128, 255);
+      }
+    }
   } break;
 
   case 11: {
-    colorBar.setTitle("Mohr friction coefficient tan(phi)");
+    colorBar.setTitle("rheology mu = tau/p");
     std::vector<float> frictionCoefficient(Conf.MP.size(), 0.0f);
+    std::vector<bool> valid(Conf.MP.size(), false);
+    float mumin = std::numeric_limits<float>::max();
+    float mumax = -std::numeric_limits<float>::max();
 
     for (size_t i = 0; i < Conf.MP.size(); i++) {
-      const float sx  = (float)SmoothedData[i].stress.xx;
-      const float sy  = (float)SmoothedData[i].stress.yy;
-      const float sxy = 0.5f * (float)(SmoothedData[i].stress.xy + SmoothedData[i].stress.yx);
-
-      const auto *model    = dynamic_cast<const MohrCoulomb *>(Conf.MP[i].constitutiveModel);
-      const float cohesion = model == nullptr ? 0.0f : std::max(0.0f, (float)model->Cohesion);
-      const float pressure = 0.5f * fabsf(sx + sy);
-      const float radius   = sqrtf(0.25f * (sx - sy) * (sx - sy) + sxy * sxy);
-
-      // Mohr-Coulomb tangency: R = p*sin(phi) + c*cos(phi).
-      const float amplitude = hypotf(pressure, cohesion);
-      if (amplitude > 1e-10f && radius < amplitude) {
-        const float phi        = asinf(radius / amplitude) - atan2f(cohesion, pressure);
-        frictionCoefficient[i] = tanf(std::max(0.0f, phi));
+      const RheologyData data = computeRheologyData(i);
+      if (data.stressValid) {
+        frictionCoefficient[i] = (float)data.frictionCoefficient;
+        valid[i] = true;
+        mumin = std::min(mumin, frictionCoefficient[i]);
+        mumax = std::max(mumax, frictionCoefficient[i]);
       }
     }
 
-    const auto minmax = std::minmax_element(frictionCoefficient.begin(), frictionCoefficient.end());
-    const float mumin = *minmax.first;
-    const float mumax = *minmax.second;
-    colorTable.setMinMax(mumin, mumax);
-    colorTable.setTableID(3);
-    colorTable.Rebuild();
-    std::cout << "MP colored by Mohr friction coefficient (mu_min = " << mumin << ", mu_max = " << mumax << ")\n";
-    for (size_t i = 0; i < Conf.MP.size(); i++) { colorTable.getRGB(frictionCoefficient[i], &precompColors[i]); }
-  } break;
-
-  case 12: {
-    colorBar.setTitle("rheology mu = tau/p");
-    std::vector<float> frictionCoefficient(Conf.MP.size(), 0.0f);
-
-    for (size_t i = 0; i < Conf.MP.size(); i++) {
-      const float sx  = (float)SmoothedData[i].stress.xx;
-      const float sy  = (float)SmoothedData[i].stress.yy;
-      const float sxy = 0.5f * (float)(SmoothedData[i].stress.xy + SmoothedData[i].stress.yx);
-
-      const float pressure   = 0.5f * (sx + sy);
-      const float sxx        = sx - pressure;
-      const float syy        = sy - pressure;
-      const float tau        = sqrtf(0.5f * (sxx * sxx + syy * syy + 2.0f * sxy * sxy));
-      frictionCoefficient[i] = tau / (fabsf(pressure) + 1e-10f);
+    if (mumin > mumax) {
+      std::cout << "Cannot compute mu: positive mean pressure is required\n";
+      break;
     }
-
-    const auto minmax = std::minmax_element(frictionCoefficient.begin(), frictionCoefficient.end());
-    const float mumin = *minmax.first;
-    const float mumax = *minmax.second;
     colorTable.setMinMax(mumin, mumax);
     colorTable.setTableID(3);
     colorTable.Rebuild();
-    std::cout << "MP colored by mu from deviatoric stress (mu_min = " << mumin << ", mu_max = " << mumax << ")\n";
-    for (size_t i = 0; i < Conf.MP.size(); i++) { colorTable.getRGB(frictionCoefficient[i], &precompColors[i]); }
+    std::cout << "MP colored by 3D invariant mu = tau/p (mu_min = " << mumin << ", mu_max = " << mumax << ")\n";
+    for (size_t i = 0; i < Conf.MP.size(); i++) {
+      if (valid[i]) {
+        colorTable.getRGB(frictionCoefficient[i], &precompColors[i]);
+      } else {
+        precompColors[i].set(128, 128, 128, 255);
+      }
+    }
   } break;
 
   default: {
@@ -920,12 +943,15 @@ void readConf(const char *file_name, const char *co_file_name, MPMbox &CF) {
   CF.clean();
   CF.read(file_name);
   CF.postProcess(SmoothedData);
-  precomputeColors(color_option);
-  textZone.addLine("conf%d,  t = %0.4g s", CF.iconf, CF.t);
+  smoothOutOfPlaneStress(CF);
   if (fileTool::fileExists(co_file_name)) {
     std::cout << "  with additional data in file " << co_file_name << std::endl;
     readAdditionalData(co_file_name);
+  } else {
+    ADs.clear();
   }
+  precomputeColors(color_option);
+  textZone.addLine("conf%d,  t = %0.4g s", CF.iconf, CF.t);
   if (MPREF.empty()) { MPREF = CF.MP; }
 }
 
@@ -935,10 +961,13 @@ void readAdditionalData(const char *fileName) {
   getline(is, lineTop);
   ADs.clear();
   additionalData D;
-  while (is.good()) {
-    is >> D.MP_x >> D.MP_y >> D.NInt >> D.NB >> D.TF >> D.FF >> D.Rmean >> D.Vmean >> D.VelMean >> D.VelMin >>
-        D.VelMax >> D.VelVar >> D.Vsolid >> D.Vcell >> D.h_xx >> D.h_xy >> D.h_yx >> D.h_yy >> D.ReducedPartDistMean;
+  while (is >> D.MP_x >> D.MP_y >> D.NInt >> D.NB >> D.TF >> D.FF >> D.Rmean >> D.Vmean >> D.VelMean >> D.VelMin >>
+         D.VelMax >> D.VelVar >> D.Vsolid >> D.Vcell >> D.h_xx >> D.h_xy >> D.h_yx >> D.h_yy >>
+         D.ReducedPartDistMean) {
     ADs.push_back(D);
+  }
+  if (ADs.size() != Conf.MP.size()) {
+    std::cout << "Warning: additional data contains " << ADs.size() << " rows for " << Conf.MP.size() << " MPs\n";
   }
 
   if (ADsREF.empty()) {
@@ -1062,9 +1091,6 @@ void menu(int num) {
   case 211: {
     precomputeColors(11);
   } break;
-  case 212: {
-    precomputeColors(12);
-  } break;
 
   // Grid informations
   case 300: {
@@ -1105,9 +1131,8 @@ void buildMenu() {
   glutAddMenuEntry("Volume Variation", 207);
   glutAddMenuEntry("Fx (with Obstacle)", 208);
   glutAddMenuEntry("Fy (with Obstacle)", 209);
-  glutAddMenuEntry("Inertial Number (DEM/MPM)", 210);
-  glutAddMenuEntry("mu from Principal Stresses", 211);
-  glutAddMenuEntry("mu from Deviatoric Stress (rheology)", 212);
+  glutAddMenuEntry("Inertial Number (MPMxDEM)", 210);
+  glutAddMenuEntry("Rheology mu = tau/p", 211);
 
   int submenu300 = glutCreateMenu(menu); // Grid informations
   glutAddMenuEntry("Show/Hide Grid", 300);
