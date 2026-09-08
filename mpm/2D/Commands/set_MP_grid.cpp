@@ -22,8 +22,6 @@ void set_MP_grid::exec() {
 
   double halfSizeMP = 0.5 * size;
 
-  int counter = 0;
-
   // new loop 15/05/2018 (bug should still exist but its working better now)
   double nbMPX = (x1 - x0) / size;
   double nbMPY = (y1 - y0) / size;
@@ -38,6 +36,7 @@ void set_MP_grid::exec() {
   for (int i = 0; i < nbMPY; i++) {
     for (int j = 0; j < nbMPX; j++) {
       MaterialPoint P(groupNb, size, rho, CM);
+      P.nb = box->MP.size();
       CM->init(P);
       if (P.isDoubleScale == true) {
         double Vcell = fabs(P.PBC->Cell.h.det());
@@ -45,8 +44,6 @@ void set_MP_grid::exec() {
 				P.density = P.PBC->density * P.PBC->Vsolid / Vcell;        
       }
       P.pos.set(x0 + halfSizeMP + size * j, y0 + halfSizeMP + size * i);
-      P.nb = counter;
-      counter++;
       box->MP.push_back(P);
     }
   }

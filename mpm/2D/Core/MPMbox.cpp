@@ -20,6 +20,7 @@
 #include "Commands/set_uniform_pressure.hpp"
 
 #include "ConstitutiveModels/CHCL_DEM.hpp"
+#include "ConstitutiveModels/CHCL_DEM_Multi.hpp"
 #include "ConstitutiveModels/ConstitutiveModel.hpp"
 #include "ConstitutiveModels/HookeElasticity.hpp"
 #include "ConstitutiveModels/KelvinVoigt.hpp"
@@ -198,6 +199,8 @@ void MPMbox::ExplicitRegistrations() {
   // ConstitutiveModel =========
   Factory<ConstitutiveModel, std::string>::Instance()->RegisterFactoryFunction(
       "CHCL_DEM", [](void) -> ConstitutiveModel * { return new CHCL_DEM(); });
+  Factory<ConstitutiveModel, std::string>::Instance()->RegisterFactoryFunction(
+      "CHCL_DEM_Multi", [](void) -> ConstitutiveModel * { return new CHCL_DEM_Multi(); });
   Factory<ConstitutiveModel, std::string>::Instance()->RegisterFactoryFunction(
       "HookeElasticity", [](void) -> ConstitutiveModel * { return new HookeElasticity(); });
   Factory<ConstitutiveModel, std::string>::Instance()->RegisterFactoryFunction(
@@ -1254,7 +1257,6 @@ void MPMbox::postProcess(std::vector<ProcessedDataMP> &Data) {
     I = &(Elem[MP[p].e].I[0]);
     for (size_t r = 0; r < element::nbNodes; r++) {
       nodes[I[r]].mass += MP[p].N[r] * MP[p].mass;
-      nodes[I[r]].outOfPlaneStress += MP[p].N[r] * MP[p].outOfPlaneStress;
     }
   }
 
@@ -1265,6 +1267,8 @@ void MPMbox::postProcess(std::vector<ProcessedDataMP> &Data) {
     for (size_t r = 0; r < element::nbNodes; r++) {
       nodes[I[r]].vel += MP[p].N[r] * MP[p].mass * MP[p].vel / nodes[I[r]].mass;
       nodes[I[r]].stress += MP[p].N[r] * MP[p].mass * MP[p].stress / nodes[I[r]].mass;
+      nodes[I[r]].outOfPlaneStress +=
+          MP[p].N[r] * MP[p].mass * MP[p].outOfPlaneStress / nodes[I[r]].mass;
     }
   }
   // nodes -> MPs
