@@ -1,5 +1,4 @@
-#ifndef OBSTACLE_TRACKING_HPP
-#define OBSTACLE_TRACKING_HPP
+#pragma once
 
 #include "Spy.hpp"
 
@@ -19,9 +18,7 @@ struct ObstacleTracking : public Spy {
   void remapObstacleNumber(const std::vector<int> &oldToNew);
 
 private:
-  int obstacleNumber;
+  int obstacleNumber{0};
   std::string filename;
   std::ofstream file;
 };
-
-#endif /* end of include guard: OBSTACLE_TRACKING_HPP */

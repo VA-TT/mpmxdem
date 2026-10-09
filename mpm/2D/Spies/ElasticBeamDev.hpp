@@ -1,5 +1,4 @@
-#ifndef ELASTIC_BEAM_DEV_HPP
-#define ELASTIC_BEAM_DEV_HPP
+#pragma once
 
 #include "Spy.hpp"
 
@@ -17,7 +16,5 @@ struct ElasticBeamDev : public Spy {
   std::string filename;
   std::ofstream file;
 
-  double KinEnergyTot;
+  double KinEnergyTot{0.0};
 };
-
-#endif /* end of include guard: ELASTIC_BEAM_DEV_HPP */

@@ -48,33 +48,6 @@ if(NOT toofus_POPULATED)
 endif()
 
 # ##############################################################################
-# tclap
-
-#FetchContent_Declare(
-#  tclap
-#  GIT_REPOSITORY https://github.com/xguerin/tclap.git
-#  GIT_TAG v1.2.5)
-#FetchContent_GetProperties(tclap)
-#if(NOT tclap_POPULATED)
-#  message(STATUS "Fetching tclap")
-#  FetchContent_MakeAvailable(tclap)
-#endif()
-
-# ##############################################################################
-# Fetching fmt
-FetchContent_Declare(
-  fmt
-  GIT_REPOSITORY https://github.com/fmtlib/fmt.git
-  GIT_TAG master
-  GIT_PROGRESS TRUE
-  USES_TERMINAL_DOWNLOAD TRUE)
-FetchContent_GetProperties(fmt)
-if(NOT fmt_POPULATED)
-  message(STATUS "Fetching fmt")
-  FetchContent_MakeAvailable(fmt)
-endif()
-
-# ##############################################################################
 # OpenMP
 find_package(OpenMP)
 if(OpenMP_CXX_FOUND)
@@ -93,47 +66,11 @@ if(OPENGL_FOUND)
 endif()
 
 # ##############################################################################
-# glut
-if(${CMAKE_HOST_SYSTEM_NAME} MATCHES "Darwin")
-
-  # here, we do not uses find_package(glut) so that the version installed by
-  # apple is NOT used
-  if(NOT PkgConfig_FOUND)
-    find_package(PkgConfig REQUIRED)
-  endif()
-
-  pkg_check_modules(GL REQUIRED gl)
-  pkg_check_modules(GLU REQUIRED glu)
-  pkg_check_modules(GLUT REQUIRED glut>=3.4.0)
-
-  if(GL_FOUND)
-    message(STATUS "GL as been found with PkgConfig")
-    message(STATUS "GL_LIBRARY_DIRS = " ${GL_LIBRARY_DIRS})
-    message(STATUS "GL_INCLUDE_DIRS = " ${GL_INCLUDE_DIRS})
-    message(STATUS "GL_LIBRARIES = " ${GL_LIBRARIES})
-  endif()
-
-  if(GLU_FOUND)
-    message(STATUS "GLU as been found with PkgConfig")
-    message(STATUS "GLU_LIBRARY_DIRS = " ${GLU_LIBRARY_DIRS})
-    message(STATUS "GLU_INCLUDE_DIRS = " ${GLU_INCLUDE_DIRS})
-    message(STATUS "GLU_LIBRARIES = " ${GLU_LIBRARIES})
-  endif()
-
-  if(GLUT_FOUND)
-    message(STATUS "GLUT as been found with PkgConfig")
-    message(STATUS "GLUT_LIBRARY_DIRS = " ${GLUT_LIBRARY_DIRS})
-    message(STATUS "GLUT_INCLUDE_DIRS = " ${GLUT_INCLUDE_DIRS})
-    message(STATUS "GLUT_LIBRARIES = " ${GLUT_LIBRARIES})
-  endif()
-
-else()
-
-  find_package(GLUT REQUIRED)
-
+# glut (freeglut)
+find_package(GLUT REQUIRED)
+if(GLUT_FOUND)
   message(STATUS "GLUT_INCLUDE_DIR = " ${GLUT_INCLUDE_DIR})
   message(STATUS "GLUT_LIBRARIES = " ${GLUT_LIBRARIES})
-
 endif()
 
 # ##############################################################################
@@ -169,67 +106,49 @@ file(
   Spies/*.cpp
   Schedulers/*.cpp)
 
-# The set of object files that constitute the library
-add_library(core_obj OBJECT ${core_object_files})
+# The static library that holds everything but the runners: 'libMPMbox.a'.
+# mpmbox, see and mpmpost all link against it.
+#
+# The target is named 'mpmbox_lib' rather than 'MPMbox': macOS file systems
+# are case-insensitive by default, so a target 'MPMbox' and the executable
+# 'mpmbox' would fight over the same CMakeFiles/<target>.dir directory. Only
+# the OUTPUT_NAME matters for the file that is produced.
+add_library(mpmbox_lib STATIC ${core_object_files})
+set_target_properties(mpmbox_lib PROPERTIES OUTPUT_NAME MPMbox)
+target_link_libraries(mpmbox_lib PUBLIC ${PLUGGED_DEM_LIBRARY})
 
-if(OpenMP_CXX_FOUND)
-  add_executable(mpmbox Runners/run.cpp $<TARGET_OBJECTS:core_obj>)
-  target_link_libraries(mpmbox PUBLIC ${PLUGGED_DEM_LIBRARY}
-  )# OpenMP::OpenMP_CXX)
-else()
-  add_executable(mpmbox Runners/run.cpp $<TARGET_OBJECTS:core_obj>)
-  target_link_libraries(mpmbox PUBLIC ${PLUGGED_DEM_LIBRARY})
-endif()
+add_executable(mpmbox Runners/run.cpp)
+target_link_libraries(mpmbox PUBLIC mpmbox_lib)
 
 
 # ##############################################################################
 # see
-if(${CMAKE_HOST_SYSTEM_NAME} MATCHES "Linux") #=========
-    
-  add_executable(see See/see.cpp $<TARGET_OBJECTS:core_obj>)
-  target_include_directories(see PRIVATE ${OPENGL_INCLUDE_DIR}
-                                         ${GLUT_INCLUDE_DIRS})
-  target_link_directories(see PRIVATE ${GLUT_LIBRARY_DIRS})
-  target_link_libraries(see PUBLIC OpenGL::GL OpenGL::GLU ${GLUT_LIBRARIES}
-                                   ${PLUGGED_DEM_LIBRARY})
+#
+# On apple, compile freeglut from source with this configuration:
+#
+# mkdir build
+# cd build
+# cmake .. -DCMAKE_INSTALL_PREFIX=/usr/local -DFREEGLUT_COCOA=ON -DFREEGLUT_BUILD_DEMOS=OFF -DCMAKE_BUILD_TYPE=Release
+# make
+# sudo make install
 
-else() # Darwin =========
-  
-  if(NOT PkgConfig_FOUND)
-    find_package(PkgConfig REQUIRED)
-  endif()
+add_executable(see See/see.cpp)
+target_include_directories(see PRIVATE ${OPENGL_INCLUDE_DIR}
+                                       ${GLUT_INCLUDE_DIRS} /usr/local/include)
+target_link_libraries(see PUBLIC mpmbox_lib OpenGL::GL OpenGL::GLU
+                                 ${GLUT_LIBRARIES})
 
-  pkg_check_modules(GL REQUIRED gl)
-  pkg_check_modules(GLU REQUIRED glu)
-  pkg_check_modules(GLUT REQUIRED glut>=3.4.0)
 
-  if(GL_FOUND)
-    message(STATUS "GL as been found with PkgConfig")
-    message(STATUS "GL_LIBRARY_DIRS = " ${GL_LIBRARY_DIRS})
-    message(STATUS "GL_INCLUDE_DIRS = " ${GL_INCLUDE_DIRS})
-    message(STATUS "GL_LIBRARIES = " ${GL_LIBRARIES})
-  endif()
+# ##############################################################################
+# mpmpost
+#
+# Post-processing driven by a command file. See Doc/SyntaxMPMpost.md.
+# The main is in Runners/, so that Post/*.cpp holds only the actions.
 
-  if(GLU_FOUND)
-    message(STATUS "GLU as been found with PkgConfig")
-    message(STATUS "GLU_LIBRARY_DIRS = " ${GLU_LIBRARY_DIRS})
-    message(STATUS "GLU_INCLUDE_DIRS = " ${GLU_INCLUDE_DIRS})
-    message(STATUS "GLU_LIBRARIES = " ${GLU_LIBRARIES})
-  endif()
+file(GLOB post_object_files CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}
+     Post/*.cpp)
 
-  if(GLUT_FOUND)
-    message(STATUS "GLUT as been found with PkgConfig")
-    message(STATUS "GLUT_LIBRARY_DIRS = " ${GLUT_LIBRARY_DIRS})
-    message(STATUS "GLUT_INCLUDE_DIRS = " ${GLUT_INCLUDE_DIRS})
-    message(STATUS "GLUT_LIBRARIES = " ${GLUT_LIBRARIES})
-  endif()
-  
-  add_executable(see See/see.cpp $<TARGET_OBJECTS:core_obj>)
-  target_include_directories(see PRIVATE ${OPENGL_INCLUDE_DIR} ${GLU_INCLUDE_DIRS}
-                                         ${GLUT_INCLUDE_DIRS})
-  target_link_directories(see PRIVATE ${GL_LIBRARY_DIRS} ${GLU_LIBRARY_DIRS}
-                            ${GLUT_LIBRARY_DIRS})
-  target_link_libraries(see PUBLIC ${GL_LIBRARIES} ${GLU_LIBRARIES} ${GLUT_LIBRARIES}
-                                   ${PLUGGED_DEM_LIBRARY})
-                                     
-endif() #=========
+add_executable(mpmpost Runners/post.cpp ${post_object_files})
+target_link_libraries(mpmpost PUBLIC mpmbox_lib)
+
+

@@ -1,10 +1,8 @@
-#ifndef HOOKEELASTICITY_HPP
-#define HOOKEELASTICITY_HPP
+#pragma once
 
-/**
- * @file
- * @brief Implements the Hooke's law for small deformations: sigma = C * epsilon
- */
+// 
+// Implements the Hooke's law for small deformations: sigma = C * epsilon
+// 
 
 #include "ConstitutiveModel.hpp"
 
@@ -21,9 +19,7 @@ struct HookeElasticity : public ConstitutiveModel {
   double getPoisson();
 
 private:
-  double Young;
-  double Poisson;
+  double Young{0.0};
+  double Poisson{0.0};
   Rigidity C;
 };
-
-#endif /* end of include guard: HOOKEELASTICITY_HPP */

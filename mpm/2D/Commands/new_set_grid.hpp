@@ -1,5 +1,4 @@
-#ifndef NEW_SET_GRID_HPP
-#define NEW_SET_GRID_HPP
+#pragma once
 
 #include "Command.hpp"
 
@@ -9,9 +8,7 @@ struct new_set_grid : public Command {
 
  private:
   //int groupNb;
-  double lengthX;
-  double lengthY;
-  double spacing;
+  double lengthX{0.0};
+  double lengthY{0.0};
+  double spacing{0.0};
 };
-
-#endif /* end of include guard: NEW_SET_GRID_HPP */

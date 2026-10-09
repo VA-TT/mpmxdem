@@ -1,5 +1,4 @@
-#ifndef KELVIN_VOIGT_HPP
-#define KELVIN_VOIGT_HPP
+#pragma once
 
 #include "ConstitutiveModel.hpp"
 
@@ -16,10 +15,8 @@ struct KelvinVoigt : public ConstitutiveModel {
   double getPoisson();
 
 private:
-  double Young;
-  double Poisson;
+  double Young{0.0};
+  double Poisson{0.0};
   Rigidity C;
-  double eta;
+  double eta{0.0};
 };
-
-#endif /* end of include guard: KELVIN_VOIGT_HPP */

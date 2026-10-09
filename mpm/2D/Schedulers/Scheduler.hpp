@@ -1,11 +1,10 @@
-#ifndef SCHEDULER_HPP
-#define SCHEDULER_HPP
+#pragma once
 
 class MPMbox;
 #include <fstream>
 
 struct Scheduler {
-	MPMbox* box;
+	MPMbox* box{nullptr};
 	
 	virtual void plug(MPMbox* Box);
 	
@@ -15,7 +14,3 @@ struct Scheduler {
 	
 	virtual ~Scheduler ();
 };
-
-
-
-#endif /* end of include guard: SCHEDULER_HPP */

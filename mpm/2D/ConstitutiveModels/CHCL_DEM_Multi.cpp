@@ -58,5 +58,7 @@ void CHCL_DEM_Multi::init(MaterialPoint& MP) {
     MP.stress.yx = -MP.PBC->Sig.yx;
     MP.stress.yy = -MP.PBC->Sig.yy;
     MP.outOfPlaneStress = -MP.PBC->Sig.zz;
+    MP.outOfPlaneShearXZ = -0.5 * (MP.PBC->Sig.xz + MP.PBC->Sig.zx);
+    MP.outOfPlaneShearYZ = -0.5 * (MP.PBC->Sig.yz + MP.PBC->Sig.zy);
   }
 }

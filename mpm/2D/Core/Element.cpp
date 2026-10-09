@@ -2,7 +2,8 @@
 
 size_t element::nbNodes = 0;
 
-element::element() {
-  I[0] = I[1] = I[2] = I[3] = I[4] = I[5] = I[6] = I[7] = I[8] = I[9] = I[10] = I[11] = I[12] = I[13] = I[14] = I[15] =
-      0;
-}
+element::element() {}
+
+// See the drawing in Element.hpp. Node 0 of the element is the origin.
+const int element::dxOff[16] = {0, 1, 1, 0, -1, 0, 1, 2, 2, 2, 2, 1, 0, -1, -1, -1};
+const int element::dyOff[16] = {0, 0, 1, 1, -1, -1, -1, -1, 0, 1, 2, 2, 2, 2, 1, 0};

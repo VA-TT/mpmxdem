@@ -1,13 +1,11 @@
-#ifndef CONTROL_MP_HPP
-#define CONTROL_MP_HPP
+#pragma once
 
-/**
- * @file
- * @brief A class for tracking and controlling Material Points.
- *
- * The functions and data structures here are used to control the movement
- * of material points. This includes velocity control and force control.
- */
+//
+// A class for tracking and controlling Material Points.
+//
+// The functions and data structures here are used to control the movement
+// of material points. This includes velocity control and force control.
+//
 
 #include <cstddef>
 
@@ -15,13 +13,12 @@
 #define FOR_CONTROL false
 
 struct ControlMP {
-  size_t PointNumber;  // Material Point number
+  size_t PointNumber{0}; // Material Point number
 
-	bool xcontrol;
-	bool ycontrol;
-  double xvalue;
-	double yvalue;
-  ControlMP();  // Ctor
+  bool xcontrol{FOR_CONTROL};
+  bool ycontrol{FOR_CONTROL};
+  double xvalue{0.0};
+  double yvalue{0.0};
+
+  ControlMP(); // Ctor
 };
-
-#endif /* end of include guard: CONTROL_MP_HPP */

@@ -1,5 +1,4 @@
-#ifndef SET_UNIFORME_PRESSURE_HPP
-#define SET_UNIFORME_PRESSURE_HPP
+#pragma once
 
 #include "Command.hpp"
 
@@ -8,7 +7,5 @@ struct set_uniform_pressure : public Command {
   void exec();
 
  private:
-  double pressure;
+  double pressure{0.0};
 };
-
-#endif /* end of include guard: SET_UNIFORME_PRESSURE_HPP */

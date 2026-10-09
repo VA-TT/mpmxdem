@@ -1,12 +1,11 @@
-#ifndef OBSTACLE_POLYGON_HPP
-#define OBSTACLE_POLYGON_HPP
+#pragma once
 
 #include "Obstacle.hpp"
 
 struct Polygon : public Obstacle {
 
-  double R;
-  int nVertices;
+  double R{0.0};
+  int nVertices{0};
   std::vector<vec2r> verticePos;
   vec2r normal;
   vec2r tang;
@@ -22,5 +21,3 @@ struct Polygon : public Obstacle {
   virtual void createPolygon(std::vector<vec2r>& vect);
   virtual double Area();
 };
-
-#endif /* end of include guard: OBSTACLE_POLYGON2_HPP */

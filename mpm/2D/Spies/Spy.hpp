@@ -1,14 +1,15 @@
-#ifndef SPY_HPP
-#define SPY_HPP
+#pragma once
 
 class MPMbox;
 #include <fstream>
 
 struct Spy {
-  MPMbox* box;
+  MPMbox* box{nullptr};
 
-  int nstep;  // Period for exec
-  int nrec;   // Period for record
+  // Both are used as a modulo in MPMbox::run(), so they must never be zero.
+  // MPMbox::checkSettings() refuses to start if a Spy leaves them at 0 or below.
+  int nstep{1};  // Period for exec
+  int nrec{1};   // Period for record
 
   virtual void plug(MPMbox* Box);
 
@@ -20,5 +21,3 @@ struct Spy {
 
   virtual ~Spy();  // Dtor
 };
-
-#endif /* end of include guard: SPY_HPP */
