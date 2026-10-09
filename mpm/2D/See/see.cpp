@@ -1,3 +1,4 @@
+#include "Post/ScalarTools.hpp"
 #include "see.hpp"
 
 #include <algorithm>
@@ -13,18 +14,11 @@
 #include "Obstacles/Line.hpp"
 
 float computeShearRate(size_t i) {
-  const float Lxx = (float)SmoothedData[i].velGrad.xx;
-  const float Lyy = (float)SmoothedData[i].velGrad.yy;
-  const float Lxy = (float)SmoothedData[i].velGrad.xy;
-  const float Lyx = (float)SmoothedData[i].velGrad.yx;
-  return sqrtf((Lxx - Lyy) * (Lxx - Lyy) + (Lxy + Lyx) * (Lxy + Lyx));
+  return ScalarTools::shearRate2D(SmoothedData[i].velGrad);
 }
 
 float computeEquivalentShearStrain(size_t i) {
-  const float exx = (float)Conf.MP[i].strain.xx;
-  const float eyy = (float)Conf.MP[i].strain.yy;
-  const float exy = 0.5f * (float)(Conf.MP[i].strain.xy + Conf.MP[i].strain.yx);
-  return sqrtf((exx - eyy) * (exx - eyy) + 4.0f * exy * exy);
+  return ScalarTools::equivalentShearStrain(Conf.MP[i].F);
 }
 
 float percentile(std::vector<float> values, float fraction) {
@@ -35,11 +29,7 @@ float percentile(std::vector<float> values, float fraction) {
 }
 
 float computePressure(size_t i) {
-  const bool is3D = Conf.MP[i].isDoubleScale;
-  const float sx  = (float)SmoothedData[i].stress.xx;
-  const float sy  = (float)SmoothedData[i].stress.yy;
-  const float sz  = is3D ? (float)SmoothedData[i].outOfPlaneStress : 0.0f;
-  return is3D ? -(sx + sy + sz) / 3.0f : -(sx + sy) / 2.0f;
+  return -(SmoothedData[i].stress.xx + SmoothedData[i].stress.yy + SmoothedData[i].outOfPlaneStress) / 3.0;
 }
 
 float loadRepresentativeDiameter(const std::string& fileName) {
@@ -67,85 +57,42 @@ float computeRepresentativeDiameter(size_t i) {
 }
 
 float computeRheologyFriction(size_t i) {
-  const bool is3D = Conf.MP[i].isDoubleScale;
-  const float sx  = (float)SmoothedData[i].stress.xx;
-  const float sy  = (float)SmoothedData[i].stress.yy;
-  const float sxy = 0.5f * (float)(SmoothedData[i].stress.xy + SmoothedData[i].stress.yx);
-  const float sz  = is3D ? (float)SmoothedData[i].outOfPlaneStress : 0.0f;
-
+  const auto &d = SmoothedData[i];
+  const auto sigma = ScalarTools::fullStress(d.stress, d.outOfPlaneStress, d.outOfPlaneShearXZ, d.outOfPlaneShearYZ);
   const float p = computePressure(i);
-  if (p <= 1e-6f) return 0.0f;
+  return p > 1e-6f ? ScalarTools::sqrtJ2(sigma) / p : 0.0f;
+}
 
-  const float sxx = sx + p;
-  const float syy = sy + p;
-  const float szz = is3D ? sz + p : 0.0f;
-  const float sxz = is3D ? (float)SmoothedData[i].outOfPlaneShearXZ : 0.0f;
-  const float syz = is3D ? (float)SmoothedData[i].outOfPlaneShearYZ : 0.0f;
-  const float tau = sqrtf(0.5f * (sxx * sxx + syy * syy + szz * szz + 2.0f * (sxy * sxy + sxz * sxz + syz * syz)));
-
-  return tau / p;
+float computeGrainDensity(size_t i) {
+  const auto *model = dynamic_cast<const CHCL_DEM *>(Conf.MP[i].constitutiveModel);
+  if (!model) return 0.0f;
+  const auto *multi = dynamic_cast<const CHCL_DEM_Multi *>(model);
+  const std::string file = multi ? multi->getFileNameFor(Conf.MP[i]) : model->fileName;
+  static std::map<std::string, float> cache;
+  if (cache.count(file) == 0) {
+    PBC3Dbox sample;
+    sample.loadConf(file.c_str());
+    cache[file] = sample.density;
+  }
+  return cache[file];
 }
 
 float computeInertialNumber(size_t i) {
-  const float pressure  = computePressure(i);
-  const float shearRate = computeShearRate(i);
-  const float mass = (float)SmoothedData[i].rho * (float)Conf.MP[i].vol;
-  const bool uses3DStress = Conf.MP[i].isDoubleScale;
-  if (uses3DStress) {
-    const float diameter = computeRepresentativeDiameter(i);
-    if (diameter <= 0.0f) return 0.0f;
-    return shearRate * sqrtf(mass / (diameter * (fabsf(pressure) + 1e-6f)));
-  }
-  return shearRate * sqrtf(mass / (fabsf(pressure) + 1e-6f));
+  const float p = computePressure(i);
+  const float density = computeGrainDensity(i);
+  const float diameter = computeRepresentativeDiameter(i);
+  return p > 1e-6f && density > 0.0f ? diameter * computeShearRate(i) * sqrtf(density / p) : 0.0f;
 }
 
 float computePackingFraction(size_t i) {
-  if (!Conf.MP[i].isDoubleScale) return 0.0f;
-
-  const auto *model = dynamic_cast<const CHCL_DEM *>(Conf.MP[i].constitutiveModel);
-  if (model == nullptr) return 0.0f;
-
-  const auto *multi = dynamic_cast<const CHCL_DEM_Multi *>(model);
-  const std::string sampleFile = multi ? multi->getFileNameFor(Conf.MP[i]) : model->fileName;
-  static std::string loadedFile;
-  static double grainDensity = 0.0;
-  if (loadedFile != sampleFile) {
-    PBC3Dbox sample;
-    sample.loadConf(sampleFile.c_str());
-    grainDensity = sample.density;
-    loadedFile   = sampleFile;
-  }
-
-  if (grainDensity <= 0.0) return 0.0f;
-  return (float)(SmoothedData[i].rho / grainDensity);
+  const float density = computeGrainDensity(i);
+  return density > 0.0f ? SmoothedData[i].rho / density : 0.0f;
 }
 
 float computeMohrFriction(size_t i) {
-  const bool is3D = Conf.MP[i].isDoubleScale;
-  const float sx  = (float)SmoothedData[i].stress.xx;
-  const float sy  = (float)SmoothedData[i].stress.yy;
-  const float sxy = 0.5f * (float)(SmoothedData[i].stress.xy + SmoothedData[i].stress.yx);
-  const float sz  = is3D ? (float)SmoothedData[i].outOfPlaneStress : 0.0f;
-
-  // Largest Mohr circle, including sigma_zz for a 3D REV.
-  const float radius2D   = sqrtf(0.25f * (sx - sy) * (sx - sy) + sxy * sxy);
-  const float sigmaA     = -0.5f * (sx + sy) + radius2D;
-  const float sigmaB     = -0.5f * (sx + sy) - radius2D;
-  const float sigma1     = is3D ? std::max({sigmaA, sigmaB, -sz}) : std::max(sigmaA, sigmaB);
-  const float sigma3     = is3D ? std::min({sigmaA, sigmaB, -sz}) : std::min(sigmaA, sigmaB);
-  const float mohrCenter = 0.5f * (sigma1 + sigma3);
-  const float mohrRadius = 0.5f * (sigma1 - sigma3);
-
-  const auto *model     = dynamic_cast<const MohrCoulomb *>(Conf.MP[i].constitutiveModel);
-  const float cohesion  = model == nullptr ? 0.0f : std::max(0.0f, (float)model->Cohesion);
-  const float amplitude = hypotf(mohrCenter, cohesion);
-
-  if (amplitude > 1e-10f && mohrRadius < amplitude) {
-    const float phi = asinf(mohrRadius / amplitude) - atan2f(cohesion, mohrCenter);
-    return sinf(std::max(0.0f, phi));
-  }
-
-  return 0.0f;
+  const auto &d = SmoothedData[i];
+  const auto sigma = ScalarTools::fullStress(d.stress, d.outOfPlaneStress, d.outOfPlaneShearXZ, d.outOfPlaneShearYZ);
+  return ScalarTools::mobilisedSinPhi(-1.0 * sigma);
 }
 
 void printHelp() {

@@ -29,21 +29,6 @@
 #include "ConstitutiveModels/SinfoniettaCrush.hpp"
 #include "ConstitutiveModels/VonMisesElastoPlasticity.hpp"
 
-namespace {
-
-void writePlaneStrainTensor(std::ostream &file, const mat4r &tensor, double zz) {
-  file << tensor.xx << ' ' << tensor.xy << ' ' << 0.0 << ' ' << tensor.yx << ' ' << tensor.yy << ' ' << 0.0 << ' '
-       << 0.0 << ' ' << 0.0 << ' ' << zz;
-}
-
-void readPlaneStrainTensor(std::istream &file, mat4r &tensor, double &zz) {
-  double xy, xz, yx, yz, zx, zy;
-  file >> tensor.xx >> xy >> xz >> yx >> tensor.yy >> yz >> zx >> zy >> zz;
-  tensor.xy = xy;
-  tensor.yx = yx;
-}
-
-}  // namespace
 #include "Obstacles/Circle.hpp"
 #include "Obstacles/Line.hpp"
 #include "Obstacles/Obstacle.hpp"
@@ -373,8 +358,6 @@ void MPMbox::read(const char *name) {
 
   BFLCommandStored.clear();
 
-  bool planeStrainConf = false;
-  bool planeStrainShearConf = false;
   std::string token;
   file >> token;
   while (file) {
@@ -418,11 +401,6 @@ void MPMbox::read(const char *name) {
       }
     } else if (token == "planeStrain") {
       planeStrain = true;
-    } else if (token == "confFormat") {
-      int format = 0;
-      file >> format;
-      planeStrainConf = (format >= 2);
-      planeStrainShearConf = (format >= 3);
     } else if (token == "tolmass") {
       file >> tolmass;
     } else if (token == "gravity") {
@@ -652,24 +630,9 @@ void MPMbox::read(const char *name) {
         // Il faut changer les sorties suivantes (enlever stressCorrection, ajouter hardeningForce, mettre
         // outOfPlaneStress à cote de stress)
         // Pas maintenant, pour ne pas casser la compatibilité...
-        double plasticStrainZZ = 0.0;
-        file >> modelName >> P.nb >> P.groupNb >> P.vol0 >> P.vol >> P.density >> P.pos >> P.vel;
-        if (planeStrainConf) {
-          double strainZZ = 0.0;
-          double stressCorrectionZZ = 0.0;
-          double deformationZZ = 1.0;
-          readPlaneStrainTensor(file, P.strain, strainZZ);
-          readPlaneStrainTensor(file, P.plasticStrain, plasticStrainZZ);
-          readPlaneStrainTensor(file, P.stress, P.outOfPlaneStress);
-          readPlaneStrainTensor(file, P.stressCorrection, stressCorrectionZZ);
-          file >> P.splitCount;
-          readPlaneStrainTensor(file, P.F, deformationZZ);
-          if (planeStrainShearConf) file >> P.outOfPlaneShearXZ >> P.outOfPlaneShearYZ;
-          file >> P.contactf;
-        } else {
-          file >> P.strain >> P.plasticStrain >> P.stress >> P.stressCorrection >> P.splitCount >> P.F >>
-              P.outOfPlaneStress >> P.outOfPlaneShearXZ >> P.outOfPlaneShearYZ >> P.contactf;
-        }
+        file >> modelName >> P.nb >> P.groupNb >> P.vol0 >> P.vol >> P.density >> P.pos >> P.vel >> P.strain >>
+            P.plasticStrain >> P.stress >> P.stressCorrection >> P.splitCount >> P.F >> P.outOfPlaneStress >>
+            P.outOfPlaneShearXZ >> P.outOfPlaneShearYZ >> P.contactf;
 
         auto itCM = models.find(modelName);
         if (itCM == models.end()) {
@@ -684,8 +647,6 @@ void MPMbox::read(const char *name) {
         P.mass = P.vol * P.density;
         P.size = sqrt(P.vol0);
         MP.push_back(P);
-        modelStateStore.resize(MP.size());
-        modelState(iMP).outOfPlaneEp = plasticStrainZZ;
       }
     } else if (token == "Nodes") {
       if (nodes.empty()) {
@@ -770,7 +731,6 @@ void MPMbox::save(const char *name) {
   file << "# MPM_CONFIGURATION_FILE " << confFileVersion << "\n";
 
   if (planeStrain == true) { file << "planeStrain\n"; }
-  if (planeStrain == true) { file << "confFormat 3\n"; }
   file << "oneStepType " << oneStep->getRegistrationName() << '\n';
   file << "result_folder " << result_folder << "\n";
   file << "tolmass " << tolmass << '\n';
@@ -877,25 +837,10 @@ void MPMbox::save(const char *name) {
   file << std::scientific << std::setprecision(std::numeric_limits<double>::digits10 + 1);
   for (size_t iMP = 0; iMP < MP.size(); iMP++) {
     file << MP[iMP].constitutiveModel->key << ' ' << MP[iMP].nb << ' ' << MP[iMP].groupNb << ' ' << MP[iMP].vol0 << ' '
-         << MP[iMP].vol << ' ' << MP[iMP].density << ' ' << MP[iMP].pos << ' ' << MP[iMP].vel << ' ';
-    if (planeStrain) {
-      writePlaneStrainTensor(file, MP[iMP].strain, 0.0);
-      file << ' ';
-      writePlaneStrainTensor(file, MP[iMP].plasticStrain,
-                            iMP < modelStateStore.size() ? modelState(iMP).outOfPlaneEp : 0.0);
-      file << ' ';
-      writePlaneStrainTensor(file, MP[iMP].stress, MP[iMP].outOfPlaneStress);
-      file << ' ';
-      writePlaneStrainTensor(file, MP[iMP].stressCorrection, 0.0);
-      file << ' ' << MP[iMP].splitCount << ' ';
-      writePlaneStrainTensor(file, MP[iMP].F, 1.0);
-      file << ' ' << MP[iMP].outOfPlaneShearXZ << ' ' << MP[iMP].outOfPlaneShearYZ << ' ' << MP[iMP].contactf;
-    } else {
-      file << MP[iMP].strain << ' ' << MP[iMP].plasticStrain << ' ' << MP[iMP].stress << ' '
-           << MP[iMP].stressCorrection << ' ' << MP[iMP].splitCount << ' ' << MP[iMP].F << ' '
-           << MP[iMP].outOfPlaneStress << ' ' << MP[iMP].outOfPlaneShearXZ << ' ' << MP[iMP].outOfPlaneShearYZ << ' ' << MP[iMP].contactf;
-    }
-    file << '\n';
+         << MP[iMP].vol << ' ' << MP[iMP].density << ' ' << MP[iMP].pos << ' ' << MP[iMP].vel << ' ' << MP[iMP].strain
+         << ' ' << MP[iMP].plasticStrain << ' ' << MP[iMP].stress << ' ' << MP[iMP].stressCorrection << ' '
+         << MP[iMP].splitCount << ' ' << MP[iMP].F << ' ' << MP[iMP].outOfPlaneStress << ' '
+         << MP[iMP].outOfPlaneShearXZ << ' ' << MP[iMP].outOfPlaneShearYZ << ' ' << MP[iMP].contactf << '\n';
   }
 
   // Obstacle Neighbors

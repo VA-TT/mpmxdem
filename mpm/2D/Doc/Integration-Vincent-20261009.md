@@ -1,3 +1,35 @@
+# Current policy: prefer upstream implementations
+
+After review on 2026-10-09, the production configuration reader and writer
+were restored to Vincent's implementation. All new configurations, including
+planeStrain runs, use the upstream 36-column MP layout. The custom confFormat
+2/3 writer and reader are no longer used. Stress is stored as the 2x2 block plus
+sigma_zz, sigma_xz and sigma_yz; deformation gradient F remains 2x2 with F_zz=1
+implicit in plane strain. This is still a 2D MPM solver, not a general 3D solver.
+
+The previous integration is retained at
+backup/before-upstream-priority-20261009. The original local code and stash
+also remain available. Previously generated confFormat 2/3 results require
+the retained older reader; changing their header does not convert them.
+
+Local see/rheology workflows now call Vincent's Post/ScalarTools directly for
+stress invariants, principal friction, strain rate and equivalent shear strain.
+The inertial number uses d*gdot*sqrt(rho_s/P), matching mpmpost. Legacy values
+can change, especially for volume-changing flows, cohesion and nonzero xz/yz
+shears. Local workflows are retained; the numerical definitions are upstream.
+
+CHCL_DEM_Multi and its deterministic RVE assignment remain local extensions.
+Core/MPMbox.cpp differs from upstream only in their include and registration.
+HookeElasticity.cpp is identical to upstream. Build fixes and local tools remain.
+
+The mpmxdem-vincent worktree has been removed. The active checkout is
+~/mpmxdem on VA_modification; MPMrun still points to its BUILD/mpmbox.
+
+---
+
+The following is the historical record of the first integration, before this
+upstream-priority review. Its custom-format choices are superseded above.
+
 # Vincent upstream integration — 2026-10-09
 
 The integration branch starts from VA_modification (179bfde48) and merges
@@ -49,3 +81,19 @@ Validation:
 
 Validation logs for this session are in /tmp/mpmxdem-integrated-*.log and
 /tmp/mpmxdem-integrated-smoke-c7duxp9z. These temporary paths are not backups.
+
+## Upstream-priority validation
+
+- Full build succeeded for mpmbox, see, mpmpost and rheology.
+- Regression suite: 32 PASS, 0 FAIL.
+- Two-RVE standard and planeStrain smoke runs wrote and read the upstream
+  layout successfully; raw rheology post-processing completed.
+- A separate parity check imposed an affine planar expansion on eight MPs
+  with nonzero out-of-plane shears. Legacy rheology and Vincent's mpmpost
+  Scalars agreed on I, sinPhi, mu and Phi within 1e-5 relative / 1e-6 absolute
+  tolerance (mpmpost prints rounded values). Different RVE diameter/density
+  parameters were matched to each MP's assigned RVE.
+- Four benchmark cases completed. No saved old baseline is available.
+
+Logs: /tmp/mpmxdem-priority-*.log and
+/tmp/mpmxdem-upstream-compare-04w24je6 (temporary session artifacts).

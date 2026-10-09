@@ -113,7 +113,7 @@ file(
 # are case-insensitive by default, so a target 'MPMbox' and the executable
 # 'mpmbox' would fight over the same CMakeFiles/<target>.dir directory. Only
 # the OUTPUT_NAME matters for the file that is produced.
-add_library(mpmbox_lib STATIC ${core_object_files})
+add_library(mpmbox_lib STATIC ${core_object_files} Post/ScalarTools.cpp)
 set_target_properties(mpmbox_lib PROPERTIES OUTPUT_NAME MPMbox)
 target_link_libraries(mpmbox_lib PUBLIC ${PLUGGED_DEM_LIBRARY})
 
@@ -151,6 +151,7 @@ target_link_libraries(see PUBLIC mpmbox_lib OpenGL::GL OpenGL::GLU
 file(GLOB post_object_files CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}
      Post/*.cpp)
 
+list(REMOVE_ITEM post_object_files ${CMAKE_CURRENT_SOURCE_DIR}/Post/ScalarTools.cpp)
 add_executable(mpmpost Runners/post.cpp ${post_object_files})
 target_link_libraries(mpmpost PUBLIC mpmbox_lib)
 

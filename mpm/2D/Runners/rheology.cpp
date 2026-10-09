@@ -1,3 +1,4 @@
+#include "Post/ScalarTools.hpp"
 #include "Core/MPMbox.hpp"
 #include "Core/MaterialPoint.hpp"
 
@@ -115,16 +116,11 @@ std::vector<RheologyFile> findConfigurationFiles(const fs::path &directory) {
 }
 
 float computeShearRate(const ProcessedDataMP &data) {
-  const float normalDifference = static_cast<float>(data.velGrad.xx - data.velGrad.yy);
-  const float shearSum         = static_cast<float>(data.velGrad.xy + data.velGrad.yx);
-  return std::sqrt(normalDifference * normalDifference + shearSum * shearSum);
+  return ScalarTools::shearRate2D(data.velGrad);
 }
 
-float computePressure(const MPMbox &box, const std::vector<ProcessedDataMP> &data, size_t index) {
-  const float sx = static_cast<float>(data[index].stress.xx);
-  const float sy = static_cast<float>(data[index].stress.yy);
-  const float sz = box.MP[index].isDoubleScale ? static_cast<float>(data[index].outOfPlaneStress) : 0.0f;
-  return box.MP[index].isDoubleScale ? -(sx + sy + sz) / 3.0f : -(sx + sy) / 2.0f;
+float computePressure(const MPMbox & /*box*/, const std::vector<ProcessedDataMP> &data, size_t index) {
+  return -(data[index].stress.xx + data[index].stress.yy + data[index].outOfPlaneStress) / 3.0;
 }
 
 float representativeDiameter(const MPMbox &box, size_t index, std::map<std::string, float> &diameters) {
@@ -159,53 +155,25 @@ float grainDensity(const MPMbox &box, size_t index, std::map<std::string, float>
   return density;
 }
 
-float computeMohrFriction(const MPMbox &box, const std::vector<ProcessedDataMP> &data, size_t index) {
-  const float sx         = static_cast<float>(data[index].stress.xx);
-  const float sy         = static_cast<float>(data[index].stress.yy);
-  const float sxy        = 0.5f * static_cast<float>(data[index].stress.xy + data[index].stress.yx);
-  const float sz         = box.MP[index].isDoubleScale ? static_cast<float>(data[index].outOfPlaneStress) : 0.0f;
-  const float radius2D   = std::sqrt(0.25f * (sx - sy) * (sx - sy) + sxy * sxy);
-  const float sigmaA     = -0.5f * (sx + sy) + radius2D;
-  const float sigmaB     = -0.5f * (sx + sy) - radius2D;
-  const float sigma1     = box.MP[index].isDoubleScale ? std::max({sigmaA, sigmaB, -sz}) : std::max(sigmaA, sigmaB);
-  const float sigma3     = box.MP[index].isDoubleScale ? std::min({sigmaA, sigmaB, -sz}) : std::min(sigmaA, sigmaB);
-  const float mohrCenter = 0.5f * (sigma1 + sigma3);
-  const float mohrRadius = 0.5f * (sigma1 - sigma3);
-  const auto *model      = dynamic_cast<const MohrCoulomb *>(box.MP[index].constitutiveModel);
-  const float cohesion   = model == nullptr ? 0.0f : std::max(0.0f, static_cast<float>(model->Cohesion));
-  const float amplitude  = std::hypot(mohrCenter, cohesion);
-  if (amplitude <= 1.0e-10f || mohrRadius >= amplitude) return 0.0f;
-  const float phi = std::asin(mohrRadius / amplitude) - std::atan2(cohesion, mohrCenter);
-  return std::sin(std::max(0.0f, phi));
+float computeMohrFriction(const MPMbox & /*box*/, const std::vector<ProcessedDataMP> &data, size_t index) {
+  const auto &d = data[index];
+  const auto sigma = ScalarTools::fullStress(d.stress, d.outOfPlaneStress, d.outOfPlaneShearXZ, d.outOfPlaneShearYZ);
+  return ScalarTools::mobilisedSinPhi(-1.0 * sigma);
 }
 
 Row computeRow(const MPMbox &box, const std::vector<ProcessedDataMP> &data, size_t index,
                std::map<std::string, float> &diameters, std::map<std::string, float> &densities) {
-  const float pressure  = computePressure(box, data, index);
+  const float pressure = computePressure(box, data, index);
   const float shearRate = computeShearRate(data[index]);
-  const float mass      = static_cast<float>(data[index].rho * box.MP[index].vol);
-  float inertialNumber  = 0.0f;
-  if (box.MP[index].isDoubleScale) {
-    const float diameter = representativeDiameter(box, index, diameters);
-    if (diameter > 0.0f) inertialNumber = shearRate * std::sqrt(mass / (diameter * (std::fabs(pressure) + 1.0e-6f)));
-  } else {
-    inertialNumber = shearRate * std::sqrt(mass / (std::fabs(pressure) + 1.0e-6f));
-  }
-
-  const float sx               = static_cast<float>(data[index].stress.xx);
-  const float sy               = static_cast<float>(data[index].stress.yy);
-  const float sxy              = 0.5f * static_cast<float>(data[index].stress.xy + data[index].stress.yx);
-  const float sz               = box.MP[index].isDoubleScale ? static_cast<float>(data[index].outOfPlaneStress) : 0.0f;
-  const float sxx              = sx + pressure;
-  const float syy              = sy + pressure;
-  const float szz              = box.MP[index].isDoubleScale ? sz + pressure : 0.0f;
-  const float sxz = box.MP[index].isDoubleScale ? static_cast<float>(data[index].outOfPlaneShearXZ) : 0.0f;
-  const float syz = box.MP[index].isDoubleScale ? static_cast<float>(data[index].outOfPlaneShearYZ) : 0.0f;
-  const float tau = std::sqrt(0.5f * (sxx * sxx + syy * syy + szz * szz + 2.0f * (sxy * sxy + sxz * sxz + syz * syz)));
-  const float rheologyFriction = pressure > 1.0e-6f ? tau / pressure : 0.0f;
-  const float density          = grainDensity(box, index, densities);
-  const float packingFraction  = density > 0.0f ? static_cast<float>(data[index].rho) / density : 0.0f;
-  return {inertialNumber, computeMohrFriction(box, data, index), rheologyFriction, packingFraction};
+  const float density = grainDensity(box, index, densities);
+  const float diameter = representativeDiameter(box, index, diameters);
+  const float inertialNumber = pressure > 1e-6f && density > 0.0f
+      ? diameter * shearRate * std::sqrt(density / pressure) : 0.0f;
+  const auto &d = data[index];
+  const auto sigma = ScalarTools::fullStress(d.stress, d.outOfPlaneStress, d.outOfPlaneShearXZ, d.outOfPlaneShearYZ);
+  const float friction = pressure > 1e-6f ? ScalarTools::sqrtJ2(sigma) / pressure : 0.0f;
+  const float packing = density > 0.0f ? d.rho / density : 0.0f;
+  return {inertialNumber, computeMohrFriction(box, data, index), friction, packing};
 }
 
 void writeRheologyFile(const fs::path &path, const MPMbox &box, const std::vector<ProcessedDataMP> &data,

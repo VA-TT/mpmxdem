@@ -30,9 +30,9 @@ BUILD/rheology /path/to/results --mode raw
 The configuration format does not store the raw velocity gradient. Therefore
 `raw` mode still uses the velocity gradient reconstructed by
 `MPMbox::postProcess()` for the inertial number `I`; the output header records
-this explicitly. Use `smooth` when you want exact compatibility with the old
-`see` rheology export, and `raw` when you want to inspect the effect of the
-unsmoothed MP stress/density fields.
+this explicitly. Use `smooth` for grid-projected fields and `raw` to inspect unsmoothed MP
+stress/density fields. Both modes now use Vincent's definitions, so numerical
+values need not match legacy exports.
 
 The tool writes, in the results directory:
 
@@ -42,11 +42,15 @@ The tool writes, in the results directory:
 - `binned_mu_stats.dat`: logarithmic-`I` bins for `mu(I)`.
 - `binned_packing_stats.dat`: logarithmic-`I` bins for `Phi(I)`.
 
-The calculation uses the same definitions as `See/see.cpp`: smoothed velocity
-and stress, 2D or 3D pressure according to the DEM flag, representative DEM
-diameter for `I`, Mohr friction, deviatoric `tau/p`, and DEM grain density for
-`Phi`. `CHCL_DEM_Multi` is supported by selecting the RVE associated with each
-material point.
+The runner and `see` reuse Vincent's `Post/ScalarTools` for the full 3D
+stress tensor, `tau = sqrt(J2)`, 3D pressure, shear rate, and mobilised
+`sinPhi`. In particular, the principal-stress friction uses all six stress
+components; it is no longer the legacy cohesion-adjusted 2D-circle estimate.
+For a DEM material, `I = d * gdot * sqrt(rho_s / P)`, with the diameter and
+grain density read from its initial RVE. `CHCL_DEM_Multi` selects these from
+the RVE assigned to the material point. With a single-scale material and no
+specified grain diameter/density, this legacy runner reports I and Phi as zero;
+use Vincent's `mpmpost Scalars` with explicit d and rho_s for that case.
 
 The existing gnuplot scripts can plot the generated binned files. For example:
 
