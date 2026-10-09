@@ -97,3 +97,36 @@ Validation logs for this session are in /tmp/mpmxdem-integrated-*.log and
 
 Logs: /tmp/mpmxdem-priority-*.log and
 /tmp/mpmxdem-upstream-compare-04w24je6 (temporary session artifacts).
+
+
+## Final overlap audit
+
+The remaining local differences were reviewed against upstream/main:
+- OneStep, ShapeFunctions, BoundaryForceLaw, all upstream constitutive models,
+  MaterialPoint, Post and DEM numerical sources are unchanged from upstream.
+- MPMbox adds only CHCL_DEM_Multi registration. Its init now calls CHCL_DEM::init
+  through a local initializer, so allocation and initial stress transfer use
+  Vincent's implementation directly; stress updates are inherited unchanged.
+- set_MP_grid assigns MP.nb before init and keeps IDs unique across calls. This
+  is needed for the deterministic multi-RVE extension, not a constitutive change.
+- Viewer pressure coloring and key 6 now use the same 3D pressure/shear-rate
+  definitions as Vincent's Scalars. The sig_yy display is consistent end-to-end.
+- RVE diameter comes from the selected initial RVE, avoiding stale/misindexed
+  ADs data and matching the standalone rheology runner.
+- Empty viewer data is guarded before minmax dereferences.
+- Makefile includes ScalarTools and declares archive dependencies; CMake is the
+  tested build path. The full handwritten Makefile build has not been tested.
+- BeamDev and PointsInfo remain preserved local source files; neither is
+  currently registered in the upstream Spy factory, so they do not alter runs.
+
+Validation after these changes:
+- Full normal CMake build succeeded.
+- 32/32 regression tests passed.
+- Two-RVE standard/planeStrain runs and C++ configuration reading passed.
+- I, sinPhi, mu, Phi parity with mpmpost passed again.
+- Optional headless test BUILD/check_viewer_formulas passed: analytical 3D stress
+  with xz/yz shear, planar expansion, Hencky strain and actual pressure/rate colors.
+  Rebuild with: cmake --build BUILD --target check_viewer_formulas.
+
+No simulation datasets are staged. Existing backups and stash are retained.
+This audit does not establish correctness for every possible physical setup.

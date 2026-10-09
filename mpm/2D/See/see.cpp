@@ -45,8 +45,6 @@ float loadRepresentativeDiameter(const std::string& fileName) {
 }
 
 float computeRepresentativeDiameter(size_t i) {
-  if (i < ADs.size() && ADs[i].Rmean > 0.0) return 2.0f * (float)ADs[i].Rmean;
-
   const auto* multi = dynamic_cast<const CHCL_DEM_Multi*>(Conf.MP[i].constitutiveModel);
   if (multi != nullptr) return loadRepresentativeDiameter(multi->getFileNameFor(Conf.MP[i]));
 
@@ -519,6 +517,7 @@ void drawGrid() {
 void precomputeColors(int n) {
   precompColors.clear();
   precompColors.resize(SmoothedData.size());
+  if (SmoothedData.empty()) return;
 
   if (n >= 0 && color_option != n) { color_option = n; }
 
@@ -555,7 +554,7 @@ void precomputeColors(int n) {
     float pmax = -std::numeric_limits<float>::max();
     float pmin = std::numeric_limits<float>::max();
     for (size_t i = 0; i < Conf.MP.size(); i++) {
-      float p = 0.5f * (float)(SmoothedData[i].stress.xx + SmoothedData[i].stress.yy);
+      float p = computePressure(i);
       if (p > pmax) pmax = p;
       if (p < pmin) pmin = p;
     }
@@ -565,7 +564,7 @@ void precomputeColors(int n) {
     std::cout << "MP colored by pressure (pmin = " << pmin << ", pmax = " << pmax << ")\n";
 
     for (size_t i = 0; i < SmoothedData.size(); i++) {
-      float p = 0.5f * (float)(SmoothedData[i].stress.xx + SmoothedData[i].stress.yy);
+      float p = computePressure(i);
       colorTable.getRGB(p, &precompColors[i]);
     }
   } break;
@@ -592,21 +591,21 @@ void precomputeColors(int n) {
   } break;
 
   case 4: {
-    colorBar.setTitle("sig_xx");
+    colorBar.setTitle("sig_yy");
     float pmax = -std::numeric_limits<float>::max();
     float pmin = std::numeric_limits<float>::max();
     for (size_t i = 0; i < Conf.MP.size(); i++) {
-      float p = (float)SmoothedData[i].stress.xx;
+      float p = (float)SmoothedData[i].stress.yy;
       if (p > pmax) pmax = p;
       if (p < pmin) pmin = p;
     }
     colorTable.setMinMax(pmin, pmax);
     colorTable.setTableID(3);
     colorTable.Rebuild();
-    std::cout << "MP colored by sig_xx (s_xx_min = " << pmin << ", s_xx_max = " << pmax << ")\n";
+    std::cout << "MP colored by sig_yy (s_yy_min = " << pmin << ", s_yy_max = " << pmax << ")\n";
 
     for (size_t i = 0; i < SmoothedData.size(); i++) {
-      float p = (float)SmoothedData[i].stress.xx;
+      float p = (float)SmoothedData[i].stress.yy;
       colorTable.getRGB(p, &precompColors[i]);
     }
   } break;
@@ -638,9 +637,7 @@ void precomputeColors(int n) {
     float depsqmax = -std::numeric_limits<float>::max();
     float depsqmin = std::numeric_limits<float>::max();
     for (size_t i = 0; i < Conf.MP.size(); i++) {
-      float d1    = (float)(SmoothedData[i].velGrad.xx - SmoothedData[i].velGrad.yy);
-      float d2    = (float)(SmoothedData[i].velGrad.xy + SmoothedData[i].velGrad.yx);
-      float depsq = (float)sqrt(d1 * d1 + d2 * d2);
+      float depsq = computeShearRate(i);
       if (depsq > depsqmax) depsqmax = depsq;
       if (depsq < depsqmin) depsqmin = depsq;
     }
@@ -651,9 +648,7 @@ void precomputeColors(int n) {
               << ")\n";
 
     for (size_t i = 0; i < SmoothedData.size(); i++) {
-      float d1    = (float)(SmoothedData[i].velGrad.xx - SmoothedData[i].velGrad.yy);
-      float d2    = (float)(SmoothedData[i].velGrad.xy + SmoothedData[i].velGrad.yx);
-      float depsq = (float)sqrt(d1 * d1 + d2 * d2);
+      float depsq = computeShearRate(i);
       colorTable.getRGB(depsq, &precompColors[i]);
     }
   } break;
@@ -1160,7 +1155,7 @@ void buildMenu() {
   glutAddMenuEntry("Velocity Magnitude", 201);
   glutAddMenuEntry("Pressure, tr(Sig)/3", 202);
   glutAddMenuEntry("Density", 203);
-  glutAddMenuEntry("Sig xx", 204);
+  glutAddMenuEntry("Sig yy", 204);
   glutAddMenuEntry("DEM-cell damage (DEM)", 205);
   glutAddMenuEntry("Equivalent Shear Strain Rate (active band)", 206);
   glutAddMenuEntry("Volume Variation", 207);

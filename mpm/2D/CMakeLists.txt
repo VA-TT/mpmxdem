@@ -156,3 +156,8 @@ add_executable(mpmpost Runners/post.cpp ${post_object_files})
 target_link_libraries(mpmpost PUBLIC mpmbox_lib)
 
 
+
+# Optional headless regression checks of viewer formulas and color paths.
+add_executable(check_viewer_formulas EXCLUDE_FROM_ALL Tests/ViewerFormulaChecks.cpp)
+target_include_directories(check_viewer_formulas PRIVATE ${OPENGL_INCLUDE_DIR} ${GLUT_INCLUDE_DIRS} /usr/local/include)
+target_link_libraries(check_viewer_formulas PRIVATE mpmbox_lib OpenGL::GL OpenGL::GLU ${GLUT_LIBRARIES})

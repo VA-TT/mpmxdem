@@ -41,7 +41,8 @@ $(wildcard Obstacles/*.cpp) \
 $(wildcard OneStep/*.cpp) \
 $(wildcard ShapeFunctions/*.cpp) \
 $(wildcard Schedulers/*.cpp) \
-$(wildcard Spies/*.cpp)
+$(wildcard Spies/*.cpp) \
+Post/ScalarTools.cpp
 
 OBJS = $(SRCS:.cpp=.o)
 
@@ -61,7 +62,7 @@ lib/$(LIB).a: $(OBJS)
 	ar rs $@ $^
 
 mpmbox: bin/mpmbox
-bin/mpmbox: Runners/run.cpp $(OBJS)
+bin/mpmbox: Runners/run.cpp lib/$(LIB).a
 	@echo "\033[0;32m-> BUILDING" $@ "\033[0m"
 	@mkdir -p bin
 	$(CXX) $(CXXFLAGS) -c $< -o $(patsubst %.cpp, %.o, $<)
@@ -69,15 +70,15 @@ bin/mpmbox: Runners/run.cpp $(OBJS)
 
 see: bin/see
 	
-bin/see: See/see.cpp $(OBJS)
+bin/see: See/see.cpp lib/$(LIB).a
 	@echo "\033[0;32m-> BUILDING" $@ "\033[0m"
 	@mkdir -p bin
 	$(CXX) $(CXXFLAGS) $(GLUTFLAGS) -c $< -o $(patsubst %.cpp, %.o, $<)
-	$(CXX) $(CXXFLAGS) $(GLUTLIBS) -o $@ See/see.o lib/$(LIB).a $(CHCL_LIB_PATH)/$(CHCL_LIB).a
+	$(CXX) $(CXXFLAGS) -o $@ See/see.o lib/$(LIB).a $(CHCL_LIB_PATH)/$(CHCL_LIB).a $(GLUTLIBS)
 
 rheology: bin/rheology
 
-bin/rheology: Runners/rheology.cpp $(OBJS)
+bin/rheology: Runners/rheology.cpp lib/$(LIB).a
 	@echo "\033[0;32m-> BUILDING" $@ "\033[0m"
 	@mkdir -p bin
 	$(CXX) $(CXXFLAGS) -c $< -o $(patsubst %.cpp, %.o, $<)

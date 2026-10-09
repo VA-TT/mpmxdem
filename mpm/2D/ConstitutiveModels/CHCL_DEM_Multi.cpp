@@ -45,20 +45,10 @@ std::string CHCL_DEM_Multi::getFileNameFor(const MaterialPoint& MP) const {
 }
 
 void CHCL_DEM_Multi::init(MaterialPoint& MP) {
-  MP.isDoubleScale = true;
-  MP.PBC = new PBC3Dbox;
-
-  if (box->computationMode == true) {
-    const std::string selectedFile = getFileNameFor(MP);
-    MP.PBC->loadConf(selectedFile.c_str());
-
-    // PBC3D and MPMbox use opposite stress sign conventions.
-    MP.stress.xx = -MP.PBC->Sig.xx;
-    MP.stress.xy = -MP.PBC->Sig.xy;
-    MP.stress.yx = -MP.PBC->Sig.yx;
-    MP.stress.yy = -MP.PBC->Sig.yy;
-    MP.outOfPlaneStress = -MP.PBC->Sig.zz;
-    MP.outOfPlaneShearXZ = -0.5 * (MP.PBC->Sig.xz + MP.PBC->Sig.zx);
-    MP.outOfPlaneShearYZ = -0.5 * (MP.PBC->Sig.yz + MP.PBC->Sig.zy);
-  }
+  // Delegate stress initialization and DEM allocation to Vincent's law.
+  // A local initializer avoids mutating the shared model's fileName.
+  CHCL_DEM initializer;
+  initializer.box = box;
+  initializer.fileName = getFileNameFor(MP);
+  initializer.init(MP);
 }
