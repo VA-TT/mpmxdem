@@ -51,7 +51,7 @@ OBJS = $(SRCS:.cpp=.o)
 	@echo "\033[0;32m-> COMPILING" $@ "\033[0m"
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 	
-all: lib mpmbox see
+all: lib mpmbox see rheology
 
 lib: lib/$(LIB).a
 	
@@ -74,6 +74,14 @@ bin/see: See/see.cpp $(OBJS)
 	@mkdir -p bin
 	$(CXX) $(CXXFLAGS) $(GLUTFLAGS) -c $< -o $(patsubst %.cpp, %.o, $<)
 	$(CXX) $(CXXFLAGS) $(GLUTLIBS) -o $@ See/see.o lib/$(LIB).a $(CHCL_LIB_PATH)/$(CHCL_LIB).a
+
+rheology: bin/rheology
+
+bin/rheology: Runners/rheology.cpp $(OBJS)
+	@echo "\033[0;32m-> BUILDING" $@ "\033[0m"
+	@mkdir -p bin
+	$(CXX) $(CXXFLAGS) -c $< -o $(patsubst %.cpp, %.o, $<)
+	$(CXX) $(CXXFLAGS) -o $@ Runners/rheology.o lib/$(LIB).a $(CHCL_LIB_PATH)/$(CHCL_LIB).a
 
 clean:
 	rm -f $(OBJS)

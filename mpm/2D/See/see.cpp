@@ -1,14 +1,155 @@
 #include "see.hpp"
 
+#include <algorithm>
 #include <fstream>
 #include <limits>
+#include <map>
 #include <typeinfo>
 
+#include "ConstitutiveModels/CHCL_DEM.hpp"
+#include "ConstitutiveModels/CHCL_DEM_Multi.hpp"
 #include "ConstitutiveModels/MohrCoulomb.hpp"
 #include "Obstacles/Circle.hpp"
 #include "Obstacles/Line.hpp"
 
+float computeShearRate(size_t i) {
+  const float Lxx = (float)SmoothedData[i].velGrad.xx;
+  const float Lyy = (float)SmoothedData[i].velGrad.yy;
+  const float Lxy = (float)SmoothedData[i].velGrad.xy;
+  const float Lyx = (float)SmoothedData[i].velGrad.yx;
+  return sqrtf((Lxx - Lyy) * (Lxx - Lyy) + (Lxy + Lyx) * (Lxy + Lyx));
+}
+
+float computeEquivalentShearStrain(size_t i) {
+  const float exx = (float)Conf.MP[i].strain.xx;
+  const float eyy = (float)Conf.MP[i].strain.yy;
+  const float exy = 0.5f * (float)(Conf.MP[i].strain.xy + Conf.MP[i].strain.yx);
+  return sqrtf((exx - eyy) * (exx - eyy) + 4.0f * exy * exy);
+}
+
+float percentile(std::vector<float> values, float fraction) {
+  if (values.empty()) return 0.0f;
+  const size_t index = std::min(values.size() - 1, (size_t)(fraction * (float)(values.size() - 1)));
+  std::nth_element(values.begin(), values.begin() + index, values.end());
+  return values[index];
+}
+
+float computePressure(size_t i) {
+  const bool is3D = Conf.MP[i].isDoubleScale;
+  const float sx  = (float)SmoothedData[i].stress.xx;
+  const float sy  = (float)SmoothedData[i].stress.yy;
+  const float sz  = is3D ? (float)SmoothedData[i].outOfPlaneStress : 0.0f;
+  return is3D ? -(sx + sy + sz) / 3.0f : -(sx + sy) / 2.0f;
+}
+
+float loadRepresentativeDiameter(const std::string& fileName) {
+  static std::map<std::string, float> cachedDiameters;
+  const auto cached = cachedDiameters.find(fileName);
+  if (cached != cachedDiameters.end()) return cached->second;
+
+  PBC3Dbox sample;
+  sample.loadConf(fileName.c_str());
+  const float diameter = 2.0f * (float)sample.Rmean;
+  cachedDiameters[fileName] = diameter;
+  return diameter;
+}
+
+float computeRepresentativeDiameter(size_t i) {
+  if (i < ADs.size() && ADs[i].Rmean > 0.0) return 2.0f * (float)ADs[i].Rmean;
+
+  const auto* multi = dynamic_cast<const CHCL_DEM_Multi*>(Conf.MP[i].constitutiveModel);
+  if (multi != nullptr) return loadRepresentativeDiameter(multi->getFileNameFor(Conf.MP[i]));
+
+  const auto* chcl = dynamic_cast<const CHCL_DEM*>(Conf.MP[i].constitutiveModel);
+  if (chcl != nullptr) return loadRepresentativeDiameter(chcl->fileName);
+
+  return 0.0f;
+}
+
+float computeRheologyFriction(size_t i) {
+  const bool is3D = Conf.MP[i].isDoubleScale;
+  const float sx  = (float)SmoothedData[i].stress.xx;
+  const float sy  = (float)SmoothedData[i].stress.yy;
+  const float sxy = 0.5f * (float)(SmoothedData[i].stress.xy + SmoothedData[i].stress.yx);
+  const float sz  = is3D ? (float)SmoothedData[i].outOfPlaneStress : 0.0f;
+
+  const float p = computePressure(i);
+  if (p <= 1e-6f) return 0.0f;
+
+  const float sxx = sx + p;
+  const float syy = sy + p;
+  const float szz = is3D ? sz + p : 0.0f;
+  const float sxz = is3D ? (float)SmoothedData[i].outOfPlaneShearXZ : 0.0f;
+  const float syz = is3D ? (float)SmoothedData[i].outOfPlaneShearYZ : 0.0f;
+  const float tau = sqrtf(0.5f * (sxx * sxx + syy * syy + szz * szz + 2.0f * (sxy * sxy + sxz * sxz + syz * syz)));
+
+  return tau / p;
+}
+
+float computeInertialNumber(size_t i) {
+  const float pressure  = computePressure(i);
+  const float shearRate = computeShearRate(i);
+  const float mass = (float)SmoothedData[i].rho * (float)Conf.MP[i].vol;
+  const bool uses3DStress = Conf.MP[i].isDoubleScale;
+  if (uses3DStress) {
+    const float diameter = computeRepresentativeDiameter(i);
+    if (diameter <= 0.0f) return 0.0f;
+    return shearRate * sqrtf(mass / (diameter * (fabsf(pressure) + 1e-6f)));
+  }
+  return shearRate * sqrtf(mass / (fabsf(pressure) + 1e-6f));
+}
+
+float computePackingFraction(size_t i) {
+  if (!Conf.MP[i].isDoubleScale) return 0.0f;
+
+  const auto *model = dynamic_cast<const CHCL_DEM *>(Conf.MP[i].constitutiveModel);
+  if (model == nullptr) return 0.0f;
+
+  const auto *multi = dynamic_cast<const CHCL_DEM_Multi *>(model);
+  const std::string sampleFile = multi ? multi->getFileNameFor(Conf.MP[i]) : model->fileName;
+  static std::string loadedFile;
+  static double grainDensity = 0.0;
+  if (loadedFile != sampleFile) {
+    PBC3Dbox sample;
+    sample.loadConf(sampleFile.c_str());
+    grainDensity = sample.density;
+    loadedFile   = sampleFile;
+  }
+
+  if (grainDensity <= 0.0) return 0.0f;
+  return (float)(SmoothedData[i].rho / grainDensity);
+}
+
+float computeMohrFriction(size_t i) {
+  const bool is3D = Conf.MP[i].isDoubleScale;
+  const float sx  = (float)SmoothedData[i].stress.xx;
+  const float sy  = (float)SmoothedData[i].stress.yy;
+  const float sxy = 0.5f * (float)(SmoothedData[i].stress.xy + SmoothedData[i].stress.yx);
+  const float sz  = is3D ? (float)SmoothedData[i].outOfPlaneStress : 0.0f;
+
+  // Largest Mohr circle, including sigma_zz for a 3D REV.
+  const float radius2D   = sqrtf(0.25f * (sx - sy) * (sx - sy) + sxy * sxy);
+  const float sigmaA     = -0.5f * (sx + sy) + radius2D;
+  const float sigmaB     = -0.5f * (sx + sy) - radius2D;
+  const float sigma1     = is3D ? std::max({sigmaA, sigmaB, -sz}) : std::max(sigmaA, sigmaB);
+  const float sigma3     = is3D ? std::min({sigmaA, sigmaB, -sz}) : std::min(sigmaA, sigmaB);
+  const float mohrCenter = 0.5f * (sigma1 + sigma3);
+  const float mohrRadius = 0.5f * (sigma1 - sigma3);
+
+  const auto *model     = dynamic_cast<const MohrCoulomb *>(Conf.MP[i].constitutiveModel);
+  const float cohesion  = model == nullptr ? 0.0f : std::max(0.0f, (float)model->Cohesion);
+  const float amplitude = hypotf(mohrCenter, cohesion);
+
+  if (amplitude > 1e-10f && mohrRadius < amplitude) {
+    const float phi = asinf(mohrRadius / amplitude) - atan2f(cohesion, mohrCenter);
+    return sinf(std::max(0.0f, phi));
+  }
+
+  return 0.0f;
+}
+
 void printHelp() {
+  std::cout << " B/S     | shear band contrast / equivalent shear strain" << std::endl;
 
   std::cout << std::endl;
   std::cout << "-KEY-----|--DESCRIPTION-----------------------------" << std::endl;
@@ -74,51 +215,16 @@ void printInertialNumbers() {
     return;
   }
 
-  bool useDEM = !ADs.empty();
-  outFile << "# MP_index  MP_x  MP_y  I  mu_mohr_tan_phi  mu_rheology_tau_over_p (" << (useDEM ? "DEM" : "MPM")
-          << " mode, smoothed data)\n";
-  std::cout << "Exporting I, mu_mohr = tan(phi), mu_rheology = tau/p\n";
+  const bool useDEM =
+      std::any_of(Conf.MP.begin(), Conf.MP.end(), [](const MaterialPoint &mp) { return mp.isDoubleScale; });
+  outFile << "# MP_index  MP_x  MP_y  I  mu_mohr_sin_phi  mu_rheology_tau_over_p  packing_fraction_Phi ("
+          << (useDEM ? "DEM" : "MPM") << " mode, smoothed data)\n";
+  std::cout << "Exporting I, mu_mohr = sin(phi), mu_rheology = tau/p, packing fraction Phi\n";
 
   for (size_t i = 0; i < Conf.MP.size(); i++) {
-
-    float sx  = (float)SmoothedData[i].stress.xx;
-    float sy  = (float)SmoothedData[i].stress.yy;
-    float sxy = 0.5f * ((float)SmoothedData[i].stress.xy + (float)SmoothedData[i].stress.yx);
-
-    const auto *model     = dynamic_cast<const MohrCoulomb *>(Conf.MP[i].constitutiveModel);
-    const float cohesion  = model == nullptr ? 0.0f : std::max(0.0f, (float)model->Cohesion);
-    const float pressure  = 0.5f * fabsf(sx + sy);
-    const float radius    = sqrtf(0.25f * (sx - sy) * (sx - sy) + sxy * sxy);
-    const float amplitude = hypotf(pressure, cohesion);
-
-    float mu_stress = 0.0f;
-    if (amplitude > 1e-10f && radius < amplitude) {
-      const float phi = asinf(radius / amplitude) - atan2f(cohesion, pressure);
-      mu_stress       = tanf(std::max(0.0f, phi));
-    }
-
-    float d1     = (float)(SmoothedData[i].velGrad.xx - SmoothedData[i].velGrad.yy);
-    float d2     = (float)(SmoothedData[i].velGrad.xy + SmoothedData[i].velGrad.yx);
-    float epsdot = sqrtf(d1 * d1 + d2 * d2);
-    float pres   = 0.5f * (sx + sy);
-
-    float I;
-    float rho = (float)SmoothedData[i].rho;
-    if (useDEM) {
-      I = (2.0f * ADs[i].Rmean * epsdot) / sqrtf((fabsf(pres) + 1e-6f) / rho);
-    } else {
-      float m = rho * (float)Conf.MP[i].vol;
-      I       = epsdot * sqrtf(m / (fabsf(pres) + 1e-6f));
-    }
-
-    float tau_xx      = sx - pres;
-    float tau_yy      = sy - pres;
-    float tau_xy      = sxy;
-    float tau         = sqrtf(0.5f * (tau_xx * tau_xx + tau_yy * tau_yy + 2.0f * tau_xy * tau_xy));
-    float mu_rheology = tau / (fabsf(pres) + 1e-10f);
-
-    outFile << i << "  " << Conf.MP[i].pos.x << "  " << Conf.MP[i].pos.y << "  " << I << "  " << mu_stress << "  "
-            << mu_rheology << "\n";
+    outFile << i << "  " << Conf.MP[i].pos.x << "  " << Conf.MP[i].pos.y << "  " << computeInertialNumber(i) << "  "
+            << computeMohrFriction(i) << "  " << computeRheologyFriction(i) << "  " << computePackingFraction(i)
+            << "\n";
   }
 
   outFile.close();
@@ -168,10 +274,6 @@ void keyboard(unsigned char Key, int /*x*/, int /*y*/) {
     if (!ADs.empty()) precomputeColors(9);
   } break;
 
-  case 'd': {
-    show_node_dofs = 1 - show_node_dofs;
-  } break;
-
   case 'a': { // tmp: change the key
     precomputeColors(11);
   } break;
@@ -210,6 +312,14 @@ void keyboard(unsigned char Key, int /*x*/, int /*y*/) {
 
   case 'R': {
     precomputeColors(12);
+  } break;
+
+  case 'S': {
+    precomputeColors(13);
+  } break;
+
+  case 'B': {
+    precomputeColors(14);
   } break;
 
   case 'p': {
@@ -577,7 +687,7 @@ void precomputeColors(int n) {
   } break;
 
   case 6: {
-    colorBar.setTitle("deps_q");
+    colorBar.setTitle("equivalent shear strain rate");
     float depsqmax = -std::numeric_limits<float>::max();
     float depsqmin = std::numeric_limits<float>::max();
     for (size_t i = 0; i < Conf.MP.size(); i++) {
@@ -590,7 +700,8 @@ void precomputeColors(int n) {
     colorTable.setMinMax(depsqmin, depsqmax);
     colorTable.setTableID(3);
     colorTable.Rebuild();
-    std::cout << "MP colored by deps_q (deps_q_min = " << depsqmin << ", deps_q_max = " << depsqmax << ")\n";
+    std::cout << "MP colored by equivalent shear strain rate (min = " << depsqmin << ", max = " << depsqmax
+              << ")\n";
 
     for (size_t i = 0; i < SmoothedData.size(); i++) {
       float d1    = (float)(SmoothedData[i].velGrad.xx - SmoothedData[i].velGrad.yy);
@@ -661,33 +772,12 @@ void precomputeColors(int n) {
   } break;
 
   case 10: {
-    const bool useDEM = !ADs.empty();
+    const bool useDEM =
+        std::any_of(Conf.MP.begin(), Conf.MP.end(), [](const MaterialPoint &mp) { return mp.isDoubleScale; });
     std::vector<float> inertialNumber(Conf.MP.size(), 0.0f);
 
-    if (useDEM) {
-      colorBar.setTitle("Inertial number (DEM)");
-    } else {
-      colorBar.setTitle("Inertial number (MPM)");
-    }
-
-    for (size_t i = 0; i < Conf.MP.size(); i++) {
-      const float Lxx      = (float)SmoothedData[i].velGrad.xx;
-      const float Lyy      = (float)SmoothedData[i].velGrad.yy;
-      const float Lxy      = (float)SmoothedData[i].velGrad.xy;
-      const float Lyx      = (float)SmoothedData[i].velGrad.yx;
-      const float pressure = 0.5f * (float)(SmoothedData[i].stress.xx + SmoothedData[i].stress.yy);
-      const float density  = (float)SmoothedData[i].rho;
-
-      const float shearRate = sqrtf((Lxx - Lyy) * (Lxx - Lyy) + (Lxy + Lyx) * (Lxy + Lyx));
-
-      if (useDEM) {
-        const float diameter = 2.0f * (float)ADs[i].Rmean;
-        inertialNumber[i]    = diameter * shearRate / sqrtf((fabsf(pressure) + 1e-6f) / density);
-      } else {
-        const float mass  = density * (float)Conf.MP[i].vol;
-        inertialNumber[i] = shearRate * sqrtf(mass / (fabsf(pressure) + 1e-6f));
-      }
-    }
+    colorBar.setTitle(useDEM ? "Inertial number (MPMxDEM)" : "Inertial number (MPM)");
+    for (size_t i = 0; i < Conf.MP.size(); i++) { inertialNumber[i] = computeInertialNumber(i); }
 
     const auto minmax = std::minmax_element(inertialNumber.begin(), inertialNumber.end());
     const float Imin  = *minmax.first;
@@ -700,26 +790,10 @@ void precomputeColors(int n) {
   } break;
 
   case 11: {
-    colorBar.setTitle("Mohr friction coefficient tan(phi)");
+    colorBar.setTitle("Mohr friction coefficient sin(phi)");
     std::vector<float> frictionCoefficient(Conf.MP.size(), 0.0f);
 
-    for (size_t i = 0; i < Conf.MP.size(); i++) {
-      const float sx  = (float)SmoothedData[i].stress.xx;
-      const float sy  = (float)SmoothedData[i].stress.yy;
-      const float sxy = 0.5f * (float)(SmoothedData[i].stress.xy + SmoothedData[i].stress.yx);
-
-      const auto *model    = dynamic_cast<const MohrCoulomb *>(Conf.MP[i].constitutiveModel);
-      const float cohesion = model == nullptr ? 0.0f : std::max(0.0f, (float)model->Cohesion);
-      const float pressure = 0.5f * fabsf(sx + sy);
-      const float radius   = sqrtf(0.25f * (sx - sy) * (sx - sy) + sxy * sxy);
-
-      // Mohr-Coulomb tangency: R = p*sin(phi) + c*cos(phi).
-      const float amplitude = hypotf(pressure, cohesion);
-      if (amplitude > 1e-10f && radius < amplitude) {
-        const float phi        = asinf(radius / amplitude) - atan2f(cohesion, pressure);
-        frictionCoefficient[i] = tanf(std::max(0.0f, phi));
-      }
-    }
+    for (size_t i = 0; i < Conf.MP.size(); i++) { frictionCoefficient[i] = computeMohrFriction(i); }
 
     const auto minmax = std::minmax_element(frictionCoefficient.begin(), frictionCoefficient.end());
     const float mumin = *minmax.first;
@@ -735,17 +809,7 @@ void precomputeColors(int n) {
     colorBar.setTitle("rheology mu = tau/p");
     std::vector<float> frictionCoefficient(Conf.MP.size(), 0.0f);
 
-    for (size_t i = 0; i < Conf.MP.size(); i++) {
-      const float sx  = (float)SmoothedData[i].stress.xx;
-      const float sy  = (float)SmoothedData[i].stress.yy;
-      const float sxy = 0.5f * (float)(SmoothedData[i].stress.xy + SmoothedData[i].stress.yx);
-
-      const float pressure   = 0.5f * (sx + sy);
-      const float sxx        = sx - pressure;
-      const float syy        = sy - pressure;
-      const float tau        = sqrtf(0.5f * (sxx * sxx + syy * syy + 2.0f * sxy * sxy));
-      frictionCoefficient[i] = tau / (fabsf(pressure) + 1e-10f);
-    }
+    for (size_t i = 0; i < Conf.MP.size(); i++) { frictionCoefficient[i] = computeRheologyFriction(i); }
 
     const auto minmax = std::minmax_element(frictionCoefficient.begin(), frictionCoefficient.end());
     const float mumin = *minmax.first;
@@ -755,6 +819,46 @@ void precomputeColors(int n) {
     colorTable.Rebuild();
     std::cout << "MP colored by mu from deviatoric stress (mu_min = " << mumin << ", mu_max = " << mumax << ")\n";
     for (size_t i = 0; i < Conf.MP.size(); i++) { colorTable.getRGB(frictionCoefficient[i], &precompColors[i]); }
+  } break;
+
+  case 13: {
+    colorBar.setTitle("equivalent total shear strain");
+    std::vector<float> shearStrain(Conf.MP.size(), 0.0f);
+
+    for (size_t i = 0; i < Conf.MP.size(); i++) { shearStrain[i] = computeEquivalentShearStrain(i); }
+
+    const auto minmax = std::minmax_element(shearStrain.begin(), shearStrain.end());
+    const float strainMin = *minmax.first;
+    const float strainMax = *minmax.second;
+    colorTable.setMinMax(strainMin, strainMax);
+    colorTable.setTableID(3);
+    colorTable.Rebuild();
+    std::cout << "MP colored by equivalent total shear strain (min = " << strainMin
+              << ", max = " << strainMax << ")\n";
+    for (size_t i = 0; i < Conf.MP.size(); i++) { colorTable.getRGB(shearStrain[i], &precompColors[i]); }
+  } break;
+
+  case 14: {
+    colorBar.setTitle("shear-band contrast: log10(shear rate)");
+    std::vector<float> logShearRate(Conf.MP.size(), 0.0f);
+    float maximumRate = 0.0f;
+    for (size_t i = 0; i < Conf.MP.size(); i++) { maximumRate = std::max(maximumRate, computeShearRate(i)); }
+
+    // A relative floor avoids log(0) without introducing a unit-dependent threshold.
+    const float floorRate = std::max(1e-30f, maximumRate * 1e-8f);
+    for (size_t i = 0; i < Conf.MP.size(); i++) {
+      logShearRate[i] = log10f(std::max(computeShearRate(i), floorRate));
+    }
+
+    float displayMin = percentile(logShearRate, 0.05f);
+    float displayMax = percentile(logShearRate, 0.95f);
+    if (displayMax <= displayMin) displayMax = displayMin + 1.0f;
+    colorTable.setMinMax(displayMin, displayMax);
+    colorTable.setTableID(3);
+    colorTable.Rebuild();
+    std::cout << "MP colored by log10(equivalent shear strain rate), clipped to percentiles 5-95 (min = "
+              << displayMin << ", max = " << displayMax << ")\n";
+    for (size_t i = 0; i < Conf.MP.size(); i++) { colorTable.getRGB(logShearRate[i], &precompColors[i]); }
   } break;
 
   default: {
@@ -1069,6 +1173,12 @@ void menu(int num) {
   case 212: {
     precomputeColors(12);
   } break;
+  case 213: {
+    precomputeColors(13);
+  } break;
+  case 214: {
+    precomputeColors(14);
+  } break;
 
   // Grid informations
   case 300: {
@@ -1105,13 +1215,15 @@ void buildMenu() {
   glutAddMenuEntry("Density", 203);
   glutAddMenuEntry("Sig xx", 204);
   glutAddMenuEntry("DEM-cell damage (DEM)", 205);
-  glutAddMenuEntry("Delta Eps Deviator", 206);
+  glutAddMenuEntry("Equivalent Shear Strain Rate (active band)", 206);
   glutAddMenuEntry("Volume Variation", 207);
   glutAddMenuEntry("Fx (with Obstacle)", 208);
   glutAddMenuEntry("Fy (with Obstacle)", 209);
   glutAddMenuEntry("Inertial Number (DEM/MPM)", 210);
   glutAddMenuEntry("mu from Principal Stresses", 211);
   glutAddMenuEntry("mu from Deviatoric Stress (rheology)", 212);
+  glutAddMenuEntry("Equivalent Total Shear Strain", 213);
+  glutAddMenuEntry("Shear-band Contrast (log, percentile)", 214);
 
   int submenu300 = glutCreateMenu(menu); // Grid informations
   glutAddMenuEntry("Show/Hide Grid", 300);

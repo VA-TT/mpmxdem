@@ -33,7 +33,7 @@ set(CMAKE_CXX_FLAGS "-O3 -Wall -Wextra -DENABLE_PROFILING -lpthread")
 set(CMAKE_CXX_FLAGS_DEBUG "-g")
 
 include(FetchContent)
-set(FETCHCONTENT_BASE_DIR ${CMAKE_SOURCE_DIR}/deps)
+set(FETCHCONTENT_BASE_DIR ${CMAKE_BINARY_DIR}/deps)
 
 # ##############################################################################
 # Fetching TOOFUS
@@ -119,6 +119,9 @@ target_link_libraries(mpmbox_lib PUBLIC ${PLUGGED_DEM_LIBRARY})
 
 add_executable(mpmbox Runners/run.cpp)
 target_link_libraries(mpmbox PUBLIC mpmbox_lib)
+
+add_executable(rheology Runners/rheology.cpp)
+target_link_libraries(rheology PUBLIC mpmbox_lib)
 
 
 # ##############################################################################

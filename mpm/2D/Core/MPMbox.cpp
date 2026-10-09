@@ -374,6 +374,7 @@ void MPMbox::read(const char *name) {
   BFLCommandStored.clear();
 
   bool planeStrainConf = false;
+  bool planeStrainShearConf = false;
   std::string token;
   file >> token;
   while (file) {
@@ -651,13 +652,14 @@ void MPMbox::read(const char *name) {
         // Il faut changer les sorties suivantes (enlever stressCorrection, ajouter hardeningForce, mettre
         // outOfPlaneStress à cote de stress)
         // Pas maintenant, pour ne pas casser la compatibilité...
+        double plasticStrainZZ = 0.0;
         file >> modelName >> P.nb >> P.groupNb >> P.vol0 >> P.vol >> P.density >> P.pos >> P.vel;
         if (planeStrainConf) {
           double strainZZ = 0.0;
           double stressCorrectionZZ = 0.0;
           double deformationZZ = 1.0;
           readPlaneStrainTensor(file, P.strain, strainZZ);
-          readPlaneStrainTensor(file, P.plasticStrain, P.outOfPlaneEp);
+          readPlaneStrainTensor(file, P.plasticStrain, plasticStrainZZ);
           readPlaneStrainTensor(file, P.stress, P.outOfPlaneStress);
           readPlaneStrainTensor(file, P.stressCorrection, stressCorrectionZZ);
           file >> P.splitCount;
@@ -682,6 +684,8 @@ void MPMbox::read(const char *name) {
         P.mass = P.vol * P.density;
         P.size = sqrt(P.vol0);
         MP.push_back(P);
+        modelStateStore.resize(MP.size());
+        modelState(iMP).outOfPlaneEp = plasticStrainZZ;
       }
     } else if (token == "Nodes") {
       if (nodes.empty()) {
@@ -877,7 +881,8 @@ void MPMbox::save(const char *name) {
     if (planeStrain) {
       writePlaneStrainTensor(file, MP[iMP].strain, 0.0);
       file << ' ';
-      writePlaneStrainTensor(file, MP[iMP].plasticStrain, MP[iMP].outOfPlaneEp);
+      writePlaneStrainTensor(file, MP[iMP].plasticStrain,
+                            iMP < modelStateStore.size() ? modelState(iMP).outOfPlaneEp : 0.0);
       file << ' ';
       writePlaneStrainTensor(file, MP[iMP].stress, MP[iMP].outOfPlaneStress);
       file << ' ';

@@ -18,9 +18,10 @@ MP_LAYOUT = [
     ("splitCount", 1),
     ("F", 4),
     ("outOfPlaneStress", 1),
+    ("outOfPlaneShearXZ", 1), ("outOfPlaneShearYZ", 1),
     ("contactf", 2),
 ]
-MP_NCOL = sum(n for _, n in MP_LAYOUT)  # 34
+MP_NCOL = sum(n for _, n in MP_LAYOUT)  # 36
 
 
 class MP:
@@ -29,6 +30,19 @@ class MP:
     __slots__ = [name for name, _ in MP_LAYOUT] + ["mass"]
 
     def __init__(self, tokens):
+        if len(tokens) in (58, 60):
+            # Custom confFormat 2/3 stores five tensors as 3x3 matrices.
+            expanded = tokens
+            tokens = expanded[:10]
+            for start in (10, 19, 28, 37):
+                tokens += [expanded[start + j] for j in (0, 1, 3, 4)]
+            tokens += [expanded[46]]
+            tokens += [expanded[47 + j] for j in (0, 1, 3, 4)]
+            tokens += [expanded[36]]  # sigma_zz of the stress tensor
+            tokens += expanded[56:58] if len(expanded) == 60 else ["0", "0"]
+            tokens += expanded[-2:]
+        elif len(tokens) == 34:
+            tokens = tokens[:-2] + ["0", "0"] + tokens[-2:]
         if len(tokens) != MP_NCOL:
             raise ValueError("ligne MP : %d colonnes au lieu de %d" % (len(tokens), MP_NCOL))
         i = 0

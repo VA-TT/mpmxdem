@@ -52,6 +52,20 @@ List of parameters for each modelName:
   - `VonMisesElastoPlasticity`: (_double_)Young (_double_)Poisson (_double_)PlasticYieldStress
   - `MohrCoulomb`: (_double_)Young (_double_)Poisson (_double_)FrictionAngle (_double_)Cohesion (_double_)DilatancyAngle
   - `CHCL_DEM`:  (_string_)conf-filename
+  - `CHCL_DEM_Multi`: (_integer_)number-of-RVEs (_string list_)conf-filenames
+
+`CHCL_DEM_Multi` assigns one initial DEM RVE to each material point while every
+material point retains its own independent DEM simulation. The RVE file is
+selected pseudo-randomly from the supplied list using `MP.nb`. The selection is
+deterministic, so a restart or a second run with the same material-point
+numbers assigns the same RVE to each MP. Example:
+
+```
+model CHCL_DEM_Multi DE 3 rve0.txt rve1.txt rve2.txt
+```
+
+Each listed RVE has the same probability of being selected for a material
+point. Every listed file must exist before the MPM simulation starts.
 
 
 
@@ -98,7 +112,3 @@ List of parameters for each spyName:
 > For `t < t0`: keep the obstacle velocity as defined initially.
 > For `t` in `[ti, t(i+1))`: impose `(vxi, vyi)`.
 > For `t >= t(N-1)`: impose `(vx(N-1), vy(N-1))`.
-
-
-
-  

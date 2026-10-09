@@ -1,0 +1,18 @@
+# Smoke test for CHCL_DEM_Multi with two supplied PBC3D configurations.
+# RVE selection uses a reproducible hash of MP.nb.
+oneStepType ModifiedLagrangian
+result_folder Tests/manual/multi_rve_results_run1
+finalTime 1e-5
+confPeriod 1
+dt 1e-5
+ShapeFunction BSpline
+
+CHCL.minDEMstep 1
+CHCL.rateAverage 0.0
+CHCL.limitTimeStepFactor 0
+CHCL.criticalDEMTimeStepFactor 0.01
+
+model CHCL_DEM_Multi DE 2 /home/3S-LAB/vquach/.codex/attachments/fb14aa59-d207-4987-9692-35de63ae8df4/pasted-text.txt /home/3S-LAB/vquach/.codex/attachments/298b7984-fb9c-45a9-8123-a4f7e14872bf/pasted-text.txt
+
+set_node_grid W.H.lx.ly 0.2 0.1 0.1 0.1
+set_MP_grid 0 DE 550.0 0.0 0.0 0.2 0.1 0.05
