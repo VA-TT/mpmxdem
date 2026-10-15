@@ -4,6 +4,75 @@
 #include "Core/MaterialPoint.hpp"
 
 #include "PBC3D.hpp"
+#include "MohrCoulomb.hpp"
+
+#include <algorithm>
+#include <cmath>
+#include <cstdio>
+#include <mutex>
+#include <stdexcept>
+
+double CHCL_DEM::shortestThickness(const mat9r& h) {
+  // h stores lattice vectors as columns. V/|b x c| is the distance
+  // between the two faces spanned by b,c; lengths of columns are not
+  // thicknesses when the cell is sheared.
+  const vec3r a(h.xx, h.yx, h.zx), b(h.xy, h.yy, h.zy), c(h.xz, h.yz, h.zz);
+  const double volume = h.det();
+  const double area = std::max({norm(cross(b,c)), norm(cross(c,a)), norm(cross(a,b))});
+  if (!(volume > 0.0) || !(area > 0.0) || !std::isfinite(volume) || !std::isfinite(area)) {
+    throw std::runtime_error("RVE replacement: invalid periodic cell geometry");
+  }
+  return volume / area;
+}
+
+bool CHCL_DEM::replaceIfNeeded(MPMbox& MPM, size_t p) {
+  if (MPM.CHCL.replaceThicknessFactor <= 0.0) return false;
+  MaterialPoint& mp = MPM.MP[p];
+  if (!mp.PBC) throw std::runtime_error("RVE replacement: missing DEM cell");
+  const auto it = MPM.models.find(MPM.CHCL.replacementModel);
+  if (it == MPM.models.end() || dynamic_cast<MohrCoulomb*>(it->second) == nullptr) {
+    throw std::runtime_error("CHCL.replaceRVE must refer to a declared MohrCoulomb model");
+  }
+  double rmax = mp.PBC->Rmax;
+  if (!(rmax > 0.0)) {
+    for (const auto& grain : mp.PBC->Particles) rmax = std::max(rmax, grain.radius);
+  }
+  if (!(rmax > 0.0)) throw std::runtime_error("RVE replacement: invalid maximum grain radius");
+  const double dmax = 2.0 * rmax;
+  mat4r previousInverse = MPM.prevF(p);
+  previousInverse.inverse();
+  const mat4r increment = mp.F * previousInverse;
+  mat9r increment3D;
+  increment3D.xx=increment.xx; increment3D.xy=increment.xy;
+  increment3D.yx=increment.yx; increment3D.yy=increment.yy; increment3D.zz=1.0;
+  const double current = shortestThickness(mp.PBC->Cell.h);
+  const double predicted = shortestThickness(increment3D * mp.PBC->Cell.h);
+  if (std::min(current,predicted) > MPM.CHCL.replaceThicknessFactor*dmax) return false;
+
+  // Do not change density/mass/volume, total strain, stress or its zz/xz/yz
+  // components. MC starts from this exact state, applying this step once.
+  // Its in-plane return mapping still assumes zz is intermediate; no 3D
+  // yield surface or retrospective DEM plastic-strain reconstruction is added.
+  ConstitutiveModel* replacement = it->second;
+  replacement->init(mp);
+  mp.constitutiveModel = replacement;
+  mp.isTracked = false; // no DEM configuration exists after replacement
+  delete mp.PBC;
+  mp.PBC = nullptr;
+  // This physical model transition must remain visible even with a quiet logger.
+  // Serialize the whole line because different MPs can convert in parallel.
+  {
+    static std::mutex notificationMutex;
+    const std::lock_guard<std::mutex> lock(notificationMutex);
+    fmt::print(stderr, "[RVE replacement] DEM -> Mohr-Coulomb: MP={} t={} s model={} "
+                       "hmin/dmax={} predicted={} threshold={}\n",
+               mp.nb, MPM.t, replacement->key, current/dmax, predicted/dmax,
+               MPM.CHCL.replaceThicknessFactor);
+    std::fflush(stderr);
+  }
+  replacement->updateStrainAndStress(MPM,p);
+  return true;
+}
 
 std::string CHCL_DEM::getRegistrationName() { return std::string("CHCL_DEM"); }
 
@@ -40,6 +109,7 @@ void CHCL_DEM::init(MaterialPoint& MP) {
 }
 
 void CHCL_DEM::updateStrainAndStress(MPMbox& MPM, size_t p) {
+  if (replaceIfNeeded(MPM,p)) return;
   size_t* I = &(MPM.Elem[MPM.MP[p].e].I[0]);
 
   // Get the total strain increment from node velocities

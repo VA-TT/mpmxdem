@@ -21,4 +21,7 @@ struct CHCL_DEM : public ConstitutiveModel {
   void read(std::istream& is);
   void write(std::ostream& os);
   void init(MaterialPoint & MP);
+  // Shortest face-to-face distance of the current periodic parallelepiped.
+  static double shortestThickness(const mat9r& h);
+  bool replaceIfNeeded(MPMbox& MPM, size_t p);
 };

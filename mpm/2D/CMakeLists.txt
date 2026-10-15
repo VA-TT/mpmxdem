@@ -161,3 +161,7 @@ target_link_libraries(mpmpost PUBLIC mpmbox_lib)
 add_executable(check_viewer_formulas EXCLUDE_FROM_ALL Tests/ViewerFormulaChecks.cpp)
 target_include_directories(check_viewer_formulas PRIVATE ${OPENGL_INCLUDE_DIR} ${GLUT_INCLUDE_DIRS} /usr/local/include)
 target_link_libraries(check_viewer_formulas PRIVATE mpmbox_lib OpenGL::GL OpenGL::GLU ${GLUT_LIBRARIES})
+
+# Optional checks for the geometry-triggered DEM -> MC transition.
+add_executable(check_rve_replacement EXCLUDE_FROM_ALL Tests/RVEReplacementChecks.cpp)
+target_link_libraries(check_rve_replacement PRIVATE mpmbox_lib)

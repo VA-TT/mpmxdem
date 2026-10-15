@@ -143,6 +143,8 @@ public:
     double rateAverage{0};                  // end-part of MPM time step used for stress averaging
     double limitTimeStepFactor{1e-3};       // ...
     double criticalDEMTimeStepFactor{0.01}; // ...
+    double replaceThicknessFactor{0.0};    // <=0: disabled; otherwise h_min <= factor * d_max
+    std::string replacementModel;          // declared MohrCoulomb model key
   } CHCL;
 
   std::vector<size_t> liveNodeNum; // list of node numbers being updated and used during each time step

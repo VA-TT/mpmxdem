@@ -1,5 +1,7 @@
 #include "MPMbox.hpp"
 
+#include <cmath>
+
 #include "BoundaryForceLaw/BoundaryForceLaw.hpp"
 #include "BoundaryForceLaw/frictionalNormalRestitution.hpp"
 #include "BoundaryForceLaw/frictionalViscoElastic.hpp"
@@ -339,6 +341,8 @@ void MPMbox::clean() {
 
   controlledMP.clear();
   BFLCommandStored.clear();
+  CHCL.replaceThicknessFactor = 0.0;
+  CHCL.replacementModel.clear();
 }
 
 //
@@ -447,6 +451,8 @@ void MPMbox::read(const char *name) {
       file >> CHCL.limitTimeStepFactor;
     } else if (token == "CHCL.criticalDEMTimeStepFactor") {
       file >> CHCL.criticalDEMTimeStepFactor;
+    } else if (token == "CHCL.replaceRVE") {
+      file >> CHCL.replaceThicknessFactor >> CHCL.replacementModel;
     } else if (token == "set") {
       std::string param;
       size_t g1, g2; // g1 corresponds to MPgroup and g2 to obstacle group
@@ -747,6 +753,9 @@ void MPMbox::save(const char *name) {
   file << "CHCL.rateAverage " << CHCL.rateAverage << '\n';
   file << "CHCL.limitTimeStepFactor " << CHCL.limitTimeStepFactor << '\n';
   file << "CHCL.criticalDEMTimeStepFactor " << CHCL.criticalDEMTimeStepFactor << '\n';
+  if (CHCL.replaceThicknessFactor > 0.0) {
+    file << "CHCL.replaceRVE " << CHCL.replaceThicknessFactor << ' ' << CHCL.replacementModel << '\n';
+  }
 
   file << "finalTime " << finalTime << '\n';
   file << "proxPeriod " << proxPeriod << '\n';
@@ -942,7 +951,7 @@ void MPMbox::run() {
       // save DEM_MP conf-files
       if (CHCL.hasDoubleScale == true) {
         for (size_t p = 0; p < MP.size(); p++) {
-          if (MP[p].isTracked) {
+          if (MP[p].isTracked && MP[p].isDoubleScale && MP[p].PBC != nullptr) {
             char fname[256];
             snprintf(fname, 256, "%s/DEM_MP%zu/conf%i", result_folder.c_str(), p, iconf);
             MP[p].PBC->iconf = iconf;
@@ -1026,6 +1035,22 @@ void MPMbox::checkProximity() {
 //     that never appears in a 'set' line reads outside the vectors.
 //
 void MPMbox::checkSettings() {
+  if (!std::isfinite(CHCL.replaceThicknessFactor) || CHCL.replaceThicknessFactor < 0.0) {
+    Logger::critical("CHCL.replaceRVE requires a finite nonnegative thickness factor");
+    exit(EXIT_FAILURE);
+  }
+  if (CHCL.replaceThicknessFactor > 0.0) {
+    const auto it = models.find(CHCL.replacementModel);
+    const auto* mc = it == models.end() ? nullptr : dynamic_cast<const MohrCoulomb*>(it->second);
+    if (!mc || !std::isfinite(mc->Young) || !(mc->Young > 0.0) ||
+        !std::isfinite(mc->Poisson) || !(mc->Poisson > -1.0 && mc->Poisson < 0.5) ||
+        !std::isfinite(mc->FrictionAngle) || !(mc->FrictionAngle > 0.0 && mc->FrictionAngle < 1.5707963267948966) ||
+        !std::isfinite(mc->Cohesion) || mc->Cohesion < 0.0 || !std::isfinite(mc->DilatancyAngle)) {
+      Logger::critical("CHCL.replaceRVE target '{}' must be a declared valid MohrCoulomb model (angles in radians)",
+                       CHCL.replacementModel);
+      exit(EXIT_FAILURE);
+    }
+  }
   if (confPeriod <= 0) {
     Logger::critical("@MPMbox::checkSettings, confPeriod = {}; it is used as a modulo and has to be at least 1",
                      confPeriod);
